@@ -7,9 +7,27 @@ description: 使用万得Wind金融数据执行A股资金流向监控、固定�
 
 只用当前项目安装的 `wind-mcp-skill` 取数，不用网页、其它行情源或推算值补齐。把本技能视为监控工作流，Wind技能视为唯一数据底座。
 
+## 依赖安装
+
+开始任何监控任务前，先确认运行环境能发现 `wind-mcp-skill`。依次检查当前项目 `.agents/skills/wind-mcp-skill/SKILL.md`、全局技能目录和技能列表中同名技能，不要只检查与本技能同级的目录。
+
+若未安装，直接执行以下全局安装命令，不要只把命令展示给用户：
+
+```bash
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+```
+
+主源因网络原因安装失败时，改用国内镜像：
+
+```bash
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
+
+安装成功后重新发现并完整读取 `wind-mcp-skill/SKILL.md`，再继续监控任务。两种来源都失败时，保留并报告安装命令的原始错误，停止取数；不得切换网页或其它数据源。安装依赖不等于配置 Wind Key，不得把 Key 写入本技能、命令、日志或仓库；按 `wind-mcp-skill` 的认证错误指引让使用者在本机安全配置。
+
 ## 开始前
 
-1. 完整读取同级 `../wind-mcp-skill/SKILL.md`，按其规则读取本次需要的股票、指数或分析契约。
+1. 按“依赖安装”完成发现或安装，完整读取实际安装位置的 `wind-mcp-skill/SKILL.md`，按其规则读取本次需要的股票、指数或分析契约。
 2. 完整读取 [references/monitor-spec.md](references/monitor-spec.md)。查询字段、代码和状态路径需要核对时，再读取 [references/wind-query-map.md](references/wind-query-map.md)。
 3. 确认项目内存在 Wind 配置；先实际调用，只有 Wind 返回认证错误时才判定 Key 不可用。不得输出或记录 Key。
 4. 使用 Asia/Shanghai 时区和 Wind 返回的交易日、交易时间判定数据有效性。自动化传入的 `current_time_iso` 若带 `Z` 或其它 UTC 偏移，必须先解析为有时区的绝对时刻并转换到 `Asia/Shanghai`，禁止截取原字符串中的小时、分钟直接路由。

@@ -41,6 +41,20 @@ npx skills add https://github.com/kandy0619/wind-monitor-skill.git --skill wind-
 
 安装后应能在 Codex Skills 列表中看到 `wind-monitor-skill`。
 
+首次运行时，Skill 会检查 `wind-mcp-skill`。如果依赖不存在，会自动执行：
+
+```bash
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+```
+
+主源因网络问题失败时，会尝试国内镜像：
+
+```bash
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+```
+
+自动安装只负责部署依赖 Skill，不会写入或上传 Wind Key。使用者仍需按照 `wind-mcp-skill` 的认证指引在本机安全配置自己的 Key。
+
 ## 使用方式
 
 可以直接在 Codex 中提出以下类型的请求：

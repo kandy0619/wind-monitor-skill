@@ -2,7 +2,7 @@
 
 ## 依赖
 
-使用同级 `wind-mcp-skill`。调用前完整读取其 `SKILL.md`，并按领域读取：
+使用按主技能“依赖安装”流程发现或安装的 `wind-mcp-skill`，它可以位于当前项目或全局技能目录，不要求与本技能同级。调用前完整读取其 `SKILL.md`，并按领域读取：
 
 - 股票：`references/stock.md` 和需要时的 `stock-indicators.md`。
 - 指数：`references/index.md` 和需要时的 `index-indicators.md`。
