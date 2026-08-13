@@ -1,0 +1,6 @@
+interface:
+  display_name: "Wind A股资金监控"
+  short_description: "监控A股资金流向，向飞书推送精简卡片并在Codex保留完整审计报告"
+  default_prompt: "使用 $wind-monitor-skill 生成当前时点的A股资金流向监控报告。"
+policy:
+  allow_implicit_invocation: true
