@@ -34,7 +34,9 @@ def signed(value: float, suffix: str) -> str:
     return f"<font color='grey'>→ 0.0{suffix}</font>"
 
 
-def yuan(value: float) -> str:
+def yuan(value: float | None, missing: str = "Wind未返回") -> str:
+    if value is None:
+        return f"<font color='orange'>⚠ {missing}</font>"
     return signed(value / 100_000_000, "亿")
 
 
@@ -96,7 +98,9 @@ def previous_map(rows: list[list[Any]], code_index: int, value_index: int) -> di
     return {str(row[code_index]): float(row[value_index]) for row in rows}
 
 
-def stock_text(name: str, amount: float, change_pct: float) -> str:
+def stock_text(name: str, amount: float | None, change_pct: float | None) -> str:
+    if amount is None or change_pct is None:
+        return f"{name} Wind未返回"
     amount_text = f"↑+{amount:.1f}亿" if amount > 0 else f"↓{amount:.1f}亿" if amount < 0 else "→0.0亿"
     pct_text = f"↑+{change_pct:.1f}%" if change_pct > 0 else f"↓{change_pct:.1f}%" if change_pct < 0 else "→0.0%"
     return f"{name} {amount_text}/{pct_text}"
@@ -108,18 +112,24 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
     prev_stocks = previous_map(previous.get("stocks", []), 1, 3)
 
     total = float(current["index_total_yuan"])
-    delta = float(current["period_delta_yuan"])
-    baseline_delta = float(current["baseline_delta_yuan"])
+    delta_raw = current.get("period_delta_yuan")
+    baseline_raw = current.get("baseline_delta_yuan")
+    delta = float(delta_raw) if delta_raw is not None else None
+    baseline_delta = float(baseline_raw) if baseline_raw is not None else None
     slot = str(current["planned_time"])
-    if total >= 0 and delta >= 0:
+    if delta is None:
+        core = "基准建立中"
+    elif total >= 0 and delta > 0:
         core = "净流入增强"
-    elif total >= 0:
+    elif total >= 0 and delta < 0:
         core = "净流入收窄"
-    elif delta >= 0:
+    elif total < 0 and delta > 0:
         core = "净流出收窄"
-    else:
+    elif total < 0 and delta < 0:
         core = "净流出扩大"
-    header_color = "red" if total > 0 else "green" if total < 0 else "blue"
+    else:
+        core = "基本持平"
+    header_color = "orange" if delta is None else "red" if total > 0 else "green" if total < 0 else "blue"
 
     index_rows = []
     index_values = []
@@ -168,8 +178,11 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
 
     strongest = max(index_values)[1]
     weakest = min(index_values)[1]
-    direction = "增强" if delta > 0 else "收窄" if delta < 0 else "持平"
-    summary = f"🔎 四个代表指数合计{'净流入' if total >= 0 else '净流出'}，近10分钟{direction}；{strongest}最强，{weakest}相对偏弱。"
+    if delta is None:
+        summary = f"🔎 四个代表指数合计{'净流入' if total >= 0 else '净流出'}；首次预览正在建立比较基准，{strongest}最强，{weakest}相对偏弱。"
+    else:
+        direction = "增强" if delta > 0 else "收窄" if delta < 0 else "持平"
+        summary = f"🔎 四个代表指数合计{'净流入' if total >= 0 else '净流出'}，近10分钟{direction}；{strongest}最强，{weakest}相对偏弱。"
 
     market_columns = [
         {"name": "name", "display_name": "指数", "data_type": "text", "width": "auto"},
@@ -218,8 +231,8 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
     elements = [
         {"tag": "div", "fields": [
             {"is_short": True, "text": {"tag": "lark_md", "content": f"**💰 当前合计**\n{yuan(total)}"}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": f"**⏱ 近10分钟**\n{yuan(delta)}"}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": f"**🏁 较日内基准**\n{yuan(baseline_delta)}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**⏱ 近10分钟**\n{yuan(delta, '基准建立中')}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**🏁 较日内基准**\n{yuan(baseline_delta, '基准建立中')}"}},
         ]},
         {"tag": "div", "text": {"tag": "lark_md", "content": summary}},
         {"tag": "hr"},
@@ -234,8 +247,13 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
         {"tag": "hr"},
         section("🧊 行业净流出 Top 5"),
         table(industry_columns, industry_rows("industry_outflow_top5"), row_height="88px"),
-        {"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]},
     ]
+    if current.get("data_warning"):
+        elements.append({
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"<font color='orange'>⚠️ 数据提示：{current['data_warning']}</font>"},
+        })
+    elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]})
     return {
         "config": {"wide_screen_mode": True},
         "header": {
