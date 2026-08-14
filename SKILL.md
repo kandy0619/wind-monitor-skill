@@ -51,7 +51,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 ## 盘中工作流
 
-1. 批量查询3只自选股和4个代表指数。查询行业净流入、净流出Top 5及每个行业资金流入Top 3个股。
+1. 批量查询3只自选股和4个代表指数。行业数据必须按 [references/wind-query-map.md](references/wind-query-map.md) 的“两阶段行业双榜”执行：先单独取得Wind行业汇总净流入Top 5和净流出Top 5，再以这10个Wind行业完整名称单独查询各行业主力净流入Top 3个股。禁止在同一次 `analytics_data.get_financial_data` 调用中混合索取行业汇总行和个股明细行。
 2. 校验所有返回的最新交易日均为当天，交易时间没有明确停留在旧时段。时效判断只依据 Wind 返回的交易日、交易时间、响应元数据或明确的缓存标识；行业双榜与上一成功档逐项相同仅表示数值可能未变化，不能单独作为陈旧证据，也不得因此停止交付。若行业接口不返回可核验时间，但本次请求成功且没有明确陈旧标识，应保留本次真实返回并继续报告；只有存在明确旧交易日、旧时间戳或缓存标识时才按陈旧处理。任一核心数据缺失时保留其它明细，但四指数合计必须显示“Wind未完整返回”。
 3. 读取 `.codex/automation-state/a-share-watchlist-main-flow-10m.json`。新交易日清空旧状态；当天首个成功采样建立首个可用基准。
 4. 运行 `python3 scripts/calculate_monitor.py intraday --input <normalized.json> --state <state.json> --output <result.json>`，或严格复现该脚本算法。
@@ -94,6 +94,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 - `null`、缺字段、少返均写“Wind未返回”，绝不当作0。
 - 机构、大户、中户、散户只报告Wind直接返回值；不从主力金额反推。
 - 行业和行业个股排名只按主力净流入额，不用涨跌幅、成交额替代。
+- 行业双榜必须直接使用Wind返回的行业汇总行；不得汇总个股明细反推行业金额或排名。行业汇总榜与行业个股榜必须分别验证结果粒度，不能把仅带行业标签的个股行识别为行业汇总。
 - 指数接口只返回主力时，明确注明“指数接口仅提供主力口径”。
 - 四指数简单相加存在成分重叠，不等于全A去重总额。
 - 主力是Wind大额成交算法口径，不代表真实机构账户身份。
