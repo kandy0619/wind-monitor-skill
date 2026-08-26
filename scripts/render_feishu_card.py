@@ -40,7 +40,9 @@ def yuan(value: float | None, missing: str = "Wind未返回") -> str:
     return signed(value / 100_000_000, "亿")
 
 
-def industry_amount(value: float) -> str:
+def industry_amount(value: float | None) -> str:
+    if value is None:
+        return "<font color='orange'>⚠ Wind未返回</font>"
     return signed(value, "亿")
 
 
@@ -164,15 +166,21 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
     def industry_rows(key: str) -> list[dict[str, Any]]:
         rendered = []
         for rank, row in enumerate(current[key], 1):
-            name, net, stocks = terminal_industry(str(row[0])), float(row[3]), row[4]
+            name = terminal_industry(str(row[0]))
+            net = float(row[3]) if row[3] is not None else None
+            stocks = row[4] or []
             rendered.append({
                 "rank": str(rank),
                 "industry": name,
                 "net": industry_amount(net),
                 "stocks": "\n".join(
-                    stock_text(str(stock[0]), float(stock[1]), float(stock[2]))
+                    stock_text(
+                        str(stock[0]),
+                        float(stock[1]) if stock[1] is not None else None,
+                        float(stock[2]) if stock[2] is not None else None,
+                    )
                     for stock in stocks[:3]
-                ),
+                ) or "Wind未返回",
             })
         return rendered
 
@@ -310,8 +318,65 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
         {"tag": "hr"},
         section("📋 四板块各Top 5候选合并榜"),
         table(columns, rows, row_height="middle"),
-        {"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]},
     ]
+    industry_5d = current.get("industry_5d")
+    if industry_5d:
+        net_rows = []
+        for direction, key in (("加仓", "net_add_top5"), ("减仓", "net_reduce_top5")):
+            for rank, item in enumerate(industry_5d.get(key, []), 1):
+                net_rows.append({
+                    "direction": direction,
+                    "rank": str(rank),
+                    "industry": terminal_industry(str(item["industry"])),
+                    "amount": industry_amount(float(item["net_yi"])),
+                })
+        pair_rows = []
+        add_days = industry_5d.get("add_days_top5", [])
+        reduce_days = industry_5d.get("reduce_days_top5", [])
+        for rank in range(max(len(add_days), len(reduce_days))):
+            add = add_days[rank] if rank < len(add_days) else None
+            reduce = reduce_days[rank] if rank < len(reduce_days) else None
+            pair_rows.append({
+                "rank": str(rank + 1),
+                "add": f"{terminal_industry(str(add['industry']))}｜{add['days']}天" if add else "Wind未返回",
+                "reduce": f"{terminal_industry(str(reduce['industry']))}｜{reduce['days']}天" if reduce else "Wind未返回",
+            })
+        amount_rows = []
+        add_amount = industry_5d.get("add_amount_top5", [])
+        reduce_amount = industry_5d.get("reduce_amount_top5", [])
+        for rank in range(max(len(add_amount), len(reduce_amount))):
+            add = add_amount[rank] if rank < len(add_amount) else None
+            reduce = reduce_amount[rank] if rank < len(reduce_amount) else None
+            amount_rows.append({
+                "rank": str(rank + 1),
+                "add": f"{terminal_industry(str(add['industry']))}｜+{add['amount_yi']:.1f}亿" if add else "Wind未返回",
+                "reduce": f"{terminal_industry(str(reduce['industry']))}｜-{reduce['amount_yi']:.1f}亿" if reduce else "Wind未返回",
+            })
+        elements.extend([
+            {"tag": "hr"},
+            section("📊 近5日净加减仓 Top 5"),
+            table([
+                {"name": "direction", "display_name": "方向", "data_type": "text", "width": "15%"},
+                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
+                {"name": "industry", "display_name": "行业", "data_type": "text", "width": "47%"},
+                {"name": "amount", "display_name": "5日净额", "data_type": "lark_md", "width": "30%"},
+            ], net_rows),
+            {"tag": "hr"},
+            section("📅 近5日加减仓天数 Top 5"),
+            table([
+                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
+                {"name": "add", "display_name": "加仓行业｜天数", "data_type": "text", "width": "46%"},
+                {"name": "reduce", "display_name": "减仓行业｜天数", "data_type": "text", "width": "46%"},
+            ], pair_rows),
+            {"tag": "hr"},
+            section("💰 近5日加减仓金额 Top 5"),
+            table([
+                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
+                {"name": "add", "display_name": "累计加仓", "data_type": "text", "width": "46%"},
+                {"name": "reduce", "display_name": "累计减仓", "data_type": "text", "width": "46%"},
+            ], amount_rows),
+        ])
+    elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]})
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -322,7 +387,91 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def stock_label(item: dict[str, Any] | None) -> str:
+    if not item:
+        return "Wind未返回"
+    return f"{item.get('name') or 'Wind未返回'}（{item['code']}）"
+
+
+def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
+    stock_5d = current.get("stock_5d") or current
+    trade_dates = stock_5d.get("trade_dates", [])
+    if len(trade_dates) != 5:
+        raise ValueError("stock 5d payload must contain exactly five trade dates")
+
+    net_rows = []
+    for direction, key in (("加仓", "net_add_top5"), ("减仓", "net_reduce_top5")):
+        for rank, item in enumerate(stock_5d.get(key, []), 1):
+            net_rows.append({
+                "direction": direction,
+                "rank": str(rank),
+                "stock": stock_label(item),
+                "amount": yuan(float(item["net_yuan"])),
+            })
+
+    def paired_rows(add_key, reduce_key, formatter):
+        add_rows = stock_5d.get(add_key, [])
+        reduce_rows = stock_5d.get(reduce_key, [])
+        rows = []
+        for rank in range(max(len(add_rows), len(reduce_rows))):
+            add = add_rows[rank] if rank < len(add_rows) else None
+            reduce = reduce_rows[rank] if rank < len(reduce_rows) else None
+            rows.append({
+                "rank": str(rank + 1),
+                "add": formatter(add, True) if add else "Wind未返回",
+                "reduce": formatter(reduce, False) if reduce else "Wind未返回",
+            })
+        return rows
+
+    days_rows = paired_rows(
+        "add_days_top5", "reduce_days_top5",
+        lambda item, add: f"{stock_label(item)}｜{item['add_days' if add else 'reduce_days']}天",
+    )
+    amount_rows = paired_rows(
+        "add_amount_top5", "reduce_amount_top5",
+        lambda item, add: f"{stock_label(item)}｜{'+' if add else '-'}{item['add_yuan' if add else 'reduce_yuan'] / 100_000_000:.1f}亿",
+    )
+    window = f"{trade_dates[0]} 至 {trade_dates[-1]}"
+    elements = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": f"**统计区间：** {window}\n仅纳入5个交易日逐日资金均完整的A股。"}},
+        {"tag": "hr"},
+        section("📊 个股近5日净加减仓 Top 5"),
+        table([
+            {"name": "direction", "display_name": "方向", "data_type": "text", "width": "13%"},
+            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
+            {"name": "stock", "display_name": "股票", "data_type": "text", "width": "50%"},
+            {"name": "amount", "display_name": "5日净额", "data_type": "lark_md", "width": "30%"},
+        ], net_rows),
+        {"tag": "hr"},
+        section("📅 个股近5日加减仓天数 Top 5"),
+        table([
+            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
+            {"name": "add", "display_name": "加仓个股｜天数", "data_type": "text", "width": "46%"},
+            {"name": "reduce", "display_name": "减仓个股｜天数", "data_type": "text", "width": "47%"},
+        ], days_rows),
+        {"tag": "hr"},
+        section("💰 个股近5日加减仓金额 Top 5"),
+        table([
+            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
+            {"name": "add", "display_name": "累计加仓", "data_type": "text", "width": "46%"},
+            {"name": "reduce", "display_name": "累计减仓", "data_type": "text", "width": "47%"},
+        ], amount_rows),
+    ]
+    if stock_5d.get("window_note"):
+        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": stock_5d["window_note"]}]})
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "📊 15:10 收盘｜近5日个股资金统计"},
+        },
+        "elements": elements,
+    }
+
+
 def build_card(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
+    if current.get("card_mode") == "close-stock-5d" or ("stock_5d" in current and "top10" not in current):
+        return build_close_stock_5d_card(current)
     if "top10" in current:
         return build_close_card(current)
     return build_intraday_card(current, previous)

@@ -52,6 +52,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 ## 盘中工作流
 
 1. 批量查询3只自选股和4个代表指数。自选股名称与Wind代码以 [references/monitor-spec.md](references/monitor-spec.md) 和 [references/wind-query-map.md](references/wind-query-map.md) 的当前清单为准，不得沿用历史运行文件中的旧清单。行业数据必须按 [references/wind-query-map.md](references/wind-query-map.md) 的“两阶段行业双榜”执行：先单独取得Wind行业汇总净流入Top 5和净流出Top 5，再以这10个Wind行业完整名称单独查询各行业主力净流入Top 3个股。禁止在同一次 `analytics_data.get_financial_data` 调用中混合索取行业汇总行和个股明细行。
+   行业分析接口返回的是调用时可得的当日累计值，但通常不提供可核验的盘中时间戳。每个盘中档的A1、A2、B问题必须包含本次计划档位和唯一调用时刻，禁止复用同日早先请求文件或响应。若行业双榜与上一档完全相同且无行业时间戳，使用带唯一调用时刻的改写请求重新查询一次；仍相同则保留真实结果，并在状态中标记 `industry_update_status=unverified_unchanged`，不得声称发生了10分钟行业变化。
 2. 校验所有返回的最新交易日均为当天，交易时间没有明确停留在旧时段。时效判断只依据 Wind 返回的交易日、交易时间、响应元数据或明确的缓存标识；行业双榜与上一成功档逐项相同仅表示数值可能未变化，不能单独作为陈旧证据，也不得因此停止交付。若行业接口不返回可核验时间，但本次请求成功且没有明确陈旧标识，应保留本次真实返回并继续报告；只有存在明确旧交易日、旧时间戳或缓存标识时才按陈旧处理。任一核心数据缺失时保留其它明细，但四指数合计必须显示“Wind未完整返回”。
 3. 读取 `.codex/automation-state/a-share-watchlist-main-flow-10m.json`。新交易日清空旧状态；当天首个成功采样建立首个可用基准。
    自选股清单在交易日内更新时，保留仍在新清单中的股票历史值；新增股票以更新后的首个成功采样建立基准，旧状态中已不在清单的股票不得再查询、展示或参与任何统计。
@@ -79,12 +80,14 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 6. 15:00收盘值只用于最终榜单、收盘资金金额和涨跌幅，不加入用户指定的9个趋势样本。
 7. 把原始榜单、样本、计算结果和限制保存到 `.codex/automation-state/a-share-close-main-add-top10/YYYYMMDD.json`。
 8. 从同一份收盘结果生成精简版和完整审计版。严格按参考规格的“双渠道输出”投递：飞书只发送精简版，Codex先展示精简版再展示完整审计版。
+9. 查询包含当日在内的最近5个A股交易日全部Wind末级行业日频主力净流入额，每个交易日应覆盖相同的完整行业集合；保存每日原始行业表。运行 `python3 scripts/calculate_monitor.py industry-5d --input <industry-days.json> --output <industry-5d.json>`，生成近5日净加仓/净减仓Top 5、加仓/减仓天数Top 5、累计加仓/累计减仓金额Top 5，并合并进收盘精简版、完整审计版和飞书卡片。不得只用每日Top 5样本推算全行业排名。
+10. 对全部A股通过 `stock_data.search_stocks` 执行六次单方向跨日排名：5日净流入额、净流出额、加仓天数、减仓天数、累计加仓金额、累计减仓金额，各取Top 5。不要在一个问题中合并正反方向；Wind曾出现重复同一组结果。随后按三组候选分别补查5个交易日逐日主力净流入额与Wind完整行业，只纳入5日逐日值均完整的股票；使用 `python3 scripts/calculate_monitor.py stock-5d --input <stock-candidates.json> --output <stock-5d.json>` 本地复算、去重和稳定排序。优先使用包含收盘日的最近5个完整交易日；若当日日频尚不可得，则改用Wind最近5个完整交易日，并在精简版、审计版和第二张飞书卡片明确统计区间。不得用空值补0，也不得把不足5日的新股或停牌股纳入排名。
 
 ## 双渠道交付
 
 - 先完成完整Wind取数、计算和状态落盘，再由同一结果派生两个展示版本；不得为了精简展示减少查询、截断状态或丢弃原始字段。
 - 飞书使用 KStock 的 `backend/services/feishu_bot.py` `send_card`，只推送参考规格定义的可视化精简卡片。严格使用参考规格规定的标题主题色、图标、涨跌箭头、彩色数值、状态标签、紧凑表格和末级行业名；不得退化为大段纯文字，不得把完整审计表附在飞书卡片后，也不得发送第二条完整报告。
-- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。盘中档追加 `--previous <previous-normalized.json>`；当天首档和收盘档省略 `--previous`。生成器依据输入结构自动选择盘中四表卡片或收盘Top 10单表卡片。不得在自动化临时脚本中手写、删减或替换卡片结构。
+- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。盘中档追加 `--previous <previous-normalized.json>`；当天首档和收盘档省略 `--previous`。生成器依据输入结构自动选择盘中卡片、收盘榜与行业统计卡片，或 `card_mode=close-stock-5d` 的近5日个股统计卡片。收盘个股统计因单卡表格上限自然拆为第二张精简卡片，两张均属于同一15:10报告；不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
 - Codex 对报告档先展示与飞书信息等价的精简版，再以 `完整报告（审计）` 为标题展示参考规格要求的全部表格和必要限制。精简版不能替代完整审计版。
 - 纯取样档、已完成的重复档和非交易日继续静默，不输出精简版或完整版。报告档不得仅因触发延迟、执行耗时、进入下一档或发送失败而静默；必须保留 `pending` 并继续完成飞书交付。
 - 报告档只有在Wind取数、计算、规定状态落盘和飞书精简卡片发送全部成功后才标记完成。飞书失败时保留已落盘数据和待发送卡片，记录为 `pending_send`；后续触发优先直接重试发送，避免无必要地重复Wind取数。没有可复用结果时才从失败阶段继续执行。
@@ -105,8 +108,8 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 ## 自动化维护
 
-更新现有任务时优先修改自动化 `a-10`，不要创建重复任务。Codex 心跳重复规则只设置为“工作日每5分钟”，不要在重复规则中写 `BYHOUR` 或按UTC手工折算小时；部分调度器版本会把小时按UTC解释，导致北京时间整体错后8小时。每次心跳必须先把 `current_time_iso` 转换为 `Asia/Shanghai`，再由提示词严格过滤北京时间09:30—11:30和13:00—15:20（首尾均含）；窗口外静默。窗口外的技术心跳是时区兼容措施，不得执行Wind查询、写业务状态或发送飞书。5分钟心跳只负责路由、去重和重试，业务报告及取样档位仍以 [references/monitor-spec.md](references/monitor-spec.md) 为准。
+更新现有任务时优先修改自动化 `a-10`，不要创建重复任务。只保留参考规格列出的30个工作日固定业务档位，不使用每5分钟心跳，也不增加仅用于重试的触发档。当前调度器按UTC解释RRULE小时，因此实际配置使用UTC 01:30、01:40、01:50；02:00、02:10、02:20、02:30、02:40、02:50；03:00、03:10、03:15、03:20、03:30；05:00、05:10、05:20、05:30、05:40、05:45、05:50；06:00、06:10、06:20、06:30、06:40、06:45、06:50；07:00、07:10，分别对应北京时间固定档位。每次触发仍必须把 `current_time_iso` 作为绝对时间转换为 `Asia/Shanghai` 后匹配业务档位；失败只记录 `pending` / `pending_send`，等待下一固定业务档处理，不创建额外重试触发。
 
-更新后不要只检查配置已保存。至少等待一个完整心跳周期并核对目标线程出现新的 `task_started` / `task_complete`；窗口外应返回 `DONT_NOTIFY`，窗口内还要检查对应档位状态、Wind数据落盘和飞书发送结果。若自动化更新接口返回“处理器未注册”，先恢复或重启 Codex app-server，再更新原任务，禁止创建替代任务。
+更新后不要只检查配置已保存。至少等待下一个固定业务档位并核对目标线程出现新的 `task_started` / `task_complete`，同时检查对应档位状态、Wind数据落盘和飞书发送结果。若自动化更新接口返回“处理器未注册”，先恢复或重启 Codex app-server，再更新原任务，禁止创建替代任务。
 
 自动化提示词应要求调用 `$wind-monitor-skill` 并以本技能和参考规格为唯一业务口径，同时明确“触发后不受执行宽限限制，未完成档进入 `pending` 并持续重试至飞书发送成功”；自动化只需保留运行时间、必要静默规则、技能调用入口和“按技能定义执行双渠道交付”，避免复制两份会漂移的长规格或要求两个渠道发送相同内容。
