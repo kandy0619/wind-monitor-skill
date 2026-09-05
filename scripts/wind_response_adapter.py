@@ -25,7 +25,12 @@ SENSITIVE_KEY = re.compile(
     r"feishu[_-]?(?:chat|user)[_-]?id)",
     re.IGNORECASE,
 )
-UNIT_FACTORS = {"元": 1.0, "万元": 10_000.0, "亿元": 100_000_000.0}
+UNIT_FACTORS = {
+    "元": 1.0,
+    "万元": 10_000.0,
+    "百万元": 1_000_000.0,
+    "亿元": 100_000_000.0,
+}
 
 
 class AdaptationError(ValueError):
@@ -95,6 +100,13 @@ PROFILES = {
             FieldSpec("rank", ("排名", "名次", "rank"), "integer", False),
         ),
         max_rows=5,
+    ),
+    "industry_daily_full": Profile(
+        "industry_daily_full",
+        (
+            FieldSpec("industry", ("wind行业完整名称", "wind行业", "行业名称", "行业")),
+            FieldSpec("net_yuan", ("主力净流入额", "主力资金净流入", "资金净流入额", "净流入额", "净额", "net"), "amount"),
+        ),
     ),
     "industry_stock": Profile(
         "industry_stock",
@@ -232,11 +244,34 @@ def unwrap_response(raw: Any) -> Any:
 
 
 def discover_records(raw: Any) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    if isinstance(raw, dict) and isinstance(raw.get("content"), list):
+        texts = [
+            item.get("text")
+            for item in raw["content"]
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        if texts and isinstance(_parse_embedded_json(texts[0]), str):
+            message = texts[0].strip().lower()
+            if message in {"没找到数据", "暂无数据", "无数据", "no data", "not found"}:
+                return [], {}
+            raise AdaptationError("shape_mismatch", "Wind returned non-structured text content")
     value = unwrap_response(raw)
     units: dict[str, str] = {}
     if isinstance(value, list):
         if not value:
             return [], units
+        if all(
+            isinstance(item, dict)
+            and isinstance(item.get("columns") or item.get("fields"), list)
+            and isinstance(item.get("rows") or item.get("values"), list)
+            for item in value
+        ):
+            records: list[dict[str, Any]] = []
+            for table in value:
+                table_records, table_units = discover_records(table)
+                records.extend(table_records)
+                units.update(table_units)
+            return records, units
         if value and all(isinstance(row, dict) for row in value):
             return list(value), units
         raise AdaptationError("shape_mismatch", "Wind result list is not record-shaped")
@@ -283,8 +318,23 @@ def normalize_label(value: str) -> str:
 
 
 def unit_from_label(value: str) -> str | None:
-    match = re.search(r"(亿元|万元|元)", str(value))
+    match = re.search(r"(亿元|百万元|万元|元)", str(value))
     return match.group(1) if match else None
+
+
+def canonical_unit(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value)
+    if "亿元" in text:
+        return "亿元"
+    if "百万元" in text or "百万人民币元" in text:
+        return "百万元"
+    if "万元" in text:
+        return "万元"
+    if "元" in text:
+        return "元"
+    return None
 
 
 def _source_key(record: dict[str, Any], spec: FieldSpec) -> str | None:
@@ -294,6 +344,14 @@ def _source_key(record: dict[str, Any], spec: FieldSpec) -> str | None:
         candidate = normalized.get(normalize_label(alias))
         if candidate and candidate not in matches:
             matches.append(candidate)
+    if not matches:
+        for normalized_key, source_key in normalized.items():
+            if spec.name == "gross_inflow_yuan" and "净流入" in normalized_key:
+                continue
+            if spec.name == "gross_outflow_yuan" and "净流出" in normalized_key:
+                continue
+            if any(normalized_key.endswith(normalize_label(alias)) for alias in spec.aliases):
+                matches.append(source_key)
     if len(matches) > 1:
         raise AdaptationError(
             "field_ambiguous", f"multiple source fields match {spec.name}", {"matches": matches}
@@ -326,7 +384,7 @@ def _convert(value: Any, spec: FieldSpec, source_key: str, units: dict[str, str]
     number = _number(value)
     if number is None or spec.kind == "number":
         return number
-    unit = units.get(source_key) or unit_from_label(source_key)
+    unit = canonical_unit(units.get(source_key)) or unit_from_label(source_key)
     if unit not in UNIT_FACTORS:
         raise AdaptationError(
             "unit_ambiguous",
@@ -417,11 +475,20 @@ def adapt_response(raw: Any, profile_name: str, candidate: dict[str, Any] | None
 
     warnings = []
     if len(normalized_records) == 100:
-        raise AdaptationError(
-            "truncated",
-            "Wind returned exactly 100 rows; split the query before using the result",
-            {"row_count": 100},
-        )
+        if profile.name == "industry_daily_full":
+            warnings.append(
+                {
+                    "code": "possible_truncation",
+                    "message": "Wind returned exactly 100 rows; union with the reverse-sorted query before use",
+                    "row_count": 100,
+                }
+            )
+        else:
+            raise AdaptationError(
+                "truncated",
+                "Wind returned exactly 100 rows; split the query before using the result",
+                {"row_count": 100},
+            )
     if profile.max_rows is not None and len(normalized_records) > profile.max_rows:
         raise AdaptationError(
             "row_count_mismatch",
@@ -459,7 +526,7 @@ def fallback_request(raw: Any, profile_name: str, error: AdaptationError) -> dic
         ],
         "candidate_contract": {
             "profile": profile_name,
-            "fields": {"target_field": {"source_key": "exact raw field name", "unit": "元|万元|亿元 when needed"}},
+            "fields": {"target_field": {"source_key": "exact raw field name", "unit": "元|万元|百万元|亿元 when needed"}},
             "rule": "Only map fields that are explicitly present. Never infer a missing value.",
         },
     }

@@ -46,6 +46,24 @@ def industry_amount(value: float | None) -> str:
     return signed(value, "亿")
 
 
+def industry_net_yi(item: dict[str, Any]) -> float:
+    if item.get("net_yi") is not None:
+        return float(item["net_yi"])
+    return float(item["net_yuan"]) / 100_000_000
+
+
+def industry_days(item: dict[str, Any], direction: str) -> int:
+    if item.get("days") is not None:
+        return int(item["days"])
+    return int(item["add_days" if direction == "add" else "reduce_days"])
+
+
+def industry_accumulated_yi(item: dict[str, Any], direction: str) -> float:
+    if item.get("amount_yi") is not None:
+        return float(item["amount_yi"])
+    return float(item["add_yuan" if direction == "add" else "reduce_yuan"]) / 100_000_000
+
+
 def terminal_industry(name: str) -> str:
     parts = [part.strip() for part in str(name).split("--") if part.strip()]
     return parts[-1] if parts else str(name)
@@ -328,7 +346,7 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
                     "direction": direction,
                     "rank": str(rank),
                     "industry": terminal_industry(str(item["industry"])),
-                    "amount": industry_amount(float(item["net_yi"])),
+                    "amount": industry_amount(industry_net_yi(item)),
                 })
         pair_rows = []
         add_days = industry_5d.get("add_days_top5", [])
@@ -338,8 +356,8 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
             reduce = reduce_days[rank] if rank < len(reduce_days) else None
             pair_rows.append({
                 "rank": str(rank + 1),
-                "add": f"{terminal_industry(str(add['industry']))}｜{add['days']}天" if add else "Wind未返回",
-                "reduce": f"{terminal_industry(str(reduce['industry']))}｜{reduce['days']}天" if reduce else "Wind未返回",
+                "add": f"{terminal_industry(str(add['industry']))}｜{industry_days(add, 'add')}天" if add else "Wind未返回",
+                "reduce": f"{terminal_industry(str(reduce['industry']))}｜{industry_days(reduce, 'reduce')}天" if reduce else "Wind未返回",
             })
         amount_rows = []
         add_amount = industry_5d.get("add_amount_top5", [])
@@ -349,8 +367,8 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
             reduce = reduce_amount[rank] if rank < len(reduce_amount) else None
             amount_rows.append({
                 "rank": str(rank + 1),
-                "add": f"{terminal_industry(str(add['industry']))}｜+{add['amount_yi']:.1f}亿" if add else "Wind未返回",
-                "reduce": f"{terminal_industry(str(reduce['industry']))}｜-{reduce['amount_yi']:.1f}亿" if reduce else "Wind未返回",
+                "add": f"{terminal_industry(str(add['industry']))}｜+{industry_accumulated_yi(add, 'add'):.1f}亿" if add else "Wind未返回",
+                "reduce": f"{terminal_industry(str(reduce['industry']))}｜-{industry_accumulated_yi(reduce, 'reduce'):.1f}亿" if reduce else "Wind未返回",
             })
         elements.extend([
             {"tag": "hr"},
@@ -471,6 +489,14 @@ def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
 
 def annotate_report_part(card: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
     """Bind multiple Feishu cards to one logical close-report transaction."""
+    simulation_label = current.get("simulation_label")
+    if simulation_label:
+        title = card["header"]["title"]["content"]
+        card["header"]["title"]["content"] = f"🧪 {simulation_label}｜{title}"
+        card["elements"].insert(0, {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": "历史数据流程演练，不代表当前市场状态。"}],
+        })
     report_id = current.get("report_id")
     part = current.get("card_part")
     part_count = current.get("card_part_count")

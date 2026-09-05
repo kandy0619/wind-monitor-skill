@@ -78,6 +78,12 @@ class WindResponseAdapterTest(unittest.TestCase):
             adapter.adapt_response({"data": []}, "industry_summary")
         self.assertEqual(raised.exception.code, "no_data")
 
+    def test_plain_text_no_data_envelope_is_not_treated_as_a_record(self):
+        raw = {"content": [{"type": "text", "text": "没找到数据"}], "isError": False}
+        with self.assertRaises(adapter.AdaptationError) as raised:
+            adapter.adapt_response(raw, "industry_summary")
+        self.assertEqual(raised.exception.code, "no_data")
+
     def test_model_candidate_can_identify_new_record_path(self):
         raw = {"payload": {"blocks": [[{"领域": "软件", "资金差": 1.0}]]}}
         candidate = {
@@ -99,6 +105,48 @@ class WindResponseAdapterTest(unittest.TestCase):
         with self.assertRaises(adapter.AdaptationError) as raised:
             adapter.adapt_response(raw, "industry_summary")
         self.assertEqual(raised.exception.code, "truncated")
+
+    def test_current_wind_nested_table_and_million_yuan_unit(self):
+        embedded = {
+            "data": {
+                "data": [
+                    {
+                        "columns": [
+                            {"name": "WIND行业"},
+                            {"name": "2026年8月13日各行业主力净流入额", "unit": "百万元"},
+                        ],
+                        "rows": [["信息技术--软件", 123.45]],
+                    }
+                ]
+            },
+            "error": None,
+        }
+        raw = {"content": [{"type": "text", "text": __import__("json").dumps(embedded, ensure_ascii=False)}]}
+        result = adapter.adapt_response(raw, "industry_daily_full")
+        self.assertEqual(result.records[0]["industry"], "信息技术--软件")
+        self.assertEqual(result.records[0]["net_yuan"], 123_450_000)
+
+    def test_wind_million_renminbi_unit_alias(self):
+        raw = {
+            "data": [{
+                "columns": [
+                    {"name": "WIND行业"},
+                    {"name": "2026年8月13日各行业主力净流入额", "unit": "百万人民币元"},
+                ],
+                "rows": [["信息技术--软件", 12.5]],
+            }]
+        }
+        result = adapter.adapt_response(raw, "industry_daily_full")
+        self.assertEqual(result.records[0]["net_yuan"], 12_500_000)
+
+    def test_full_industry_profile_keeps_hundred_rows_for_reverse_union(self):
+        raw = [
+            {"行业": f"行业{index}", "主力净流入额(百万元)": index + 1}
+            for index in range(100)
+        ]
+        result = adapter.adapt_response(raw, "industry_daily_full")
+        self.assertEqual(len(result.records), 100)
+        self.assertEqual(result.warnings[0]["code"], "possible_truncation")
 
 
 if __name__ == "__main__":

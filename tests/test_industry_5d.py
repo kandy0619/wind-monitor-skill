@@ -65,6 +65,32 @@ class IndustryFiveDayTest(unittest.TestCase):
         tables = [element for element in card["elements"] if element.get("tag") == "table"]
         self.assertEqual(len(tables), 4)
 
+    def test_close_card_accepts_calculator_native_yuan_schema(self):
+        row = {
+            "industry": "一级--测试行业",
+            "net_yuan": 100_000_000,
+            "add_days": 4,
+            "reduce_days": 1,
+            "add_yuan": 200_000_000,
+            "reduce_yuan": 50_000_000,
+        }
+        payload = {
+            "planned_time": "15:10",
+            "wind_data_time": "2026-08-26 15:00",
+            "top10_main_net_inflow_yi": 1.0,
+            "top10_average_change_pct": 1.0,
+            "top10": [{"name": "测试股", "main_net_inflow_yi": 1.0, "change_pct": 1.0, "trend": "基本稳定"}],
+            "industry_5d": {
+                "net_add_top5": [row], "net_reduce_top5": [dict(row, net_yuan=-100_000_000)],
+                "add_days_top5": [row], "reduce_days_top5": [row],
+                "add_amount_top5": [row], "reduce_amount_top5": [row],
+            },
+            "simulation_label": "历史演练 2026-08-26",
+        }
+        card = render.build_card(payload, None)
+        self.assertIn("历史演练", card["header"]["title"]["content"])
+        self.assertEqual(sum(1 for element in card["elements"] if element.get("tag") == "table"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

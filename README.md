@@ -133,6 +133,9 @@ wind-monitor-skill/
 │   ├── build_close_report.py
 │   ├── deliver_report.py
 │   ├── kstock_feishu_delivery.py
+│   ├── collect_historical_industry.py
+│   ├── collect_historical_stock.py
+│   ├── stage_rendered_cards.py
 │   └── replay_historical.py
 └── tests/
     └── test_*.py

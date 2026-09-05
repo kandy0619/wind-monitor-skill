@@ -57,6 +57,7 @@ def build_close_report(
     close_top10: dict[str, Any],
     industry_5d: dict[str, Any],
     stock_5d: dict[str, Any],
+    simulation_label: str | None = None,
 ) -> dict[str, Any]:
     trade_date = str(_require(close_top10, "trade_date", "close_top10"))
     wind_data_time = str(_require(close_top10, "wind_data_time", "close_top10"))
@@ -96,6 +97,9 @@ def build_close_report(
         "wind_data_time": wind_data_time,
         "stock_5d": stock_5d,
     }
+    if simulation_label:
+        close_card_input["simulation_label"] = simulation_label
+        stock_card_input["simulation_label"] = simulation_label
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "close_summary",
@@ -104,6 +108,7 @@ def build_close_report(
         "planned_time": "15:10",
         "wind_data_time": wind_data_time,
         "quality_status": quality_status,
+        "simulation_label": simulation_label,
         "limitations": limitations,
         "components": {
             "close_top10": close_top10,
@@ -125,9 +130,10 @@ def main() -> None:
     parser.add_argument("--industry-5d", required=True, type=Path)
     parser.add_argument("--stock-5d", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--simulation-label")
     args = parser.parse_args()
     report = build_close_report(
-        read_json(args.top10), read_json(args.industry_5d), read_json(args.stock_5d)
+        read_json(args.top10), read_json(args.industry_5d), read_json(args.stock_5d), args.simulation_label
     )
     atomic_write_json(args.output, report)
 

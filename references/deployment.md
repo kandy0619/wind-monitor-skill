@@ -41,6 +41,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 5. `build_close_report.py`：把15:10所有组件合并为一个稳定报告ID。
 6. `render_feishu_card.py`：只从规范化JSON生成卡片。
 7. `deliver_report.py`：验证卡片并调用 `kstock_feishu_delivery.py`，逐片持久化交付结果。
+8. `stage_rendered_cards.py`：把已由官方渲染器生成并验证的卡片原样绑定到交付包，确保发送内容不被二次改写。
 
 ## 验收清单
 
@@ -62,3 +63,14 @@ python scripts/replay_historical.py --kstock-root <KStock目录> --trade-date 20
 ```
 
 旧历史分片若缺少新版收盘必需的行业5日或个股5日数据，重放结果必须是 `pending_missing_historical_components`；这表示旧数据不足，不能用插值、空值补0或测试fixture把它伪装成完整收盘报告。
+
+经明确授权进行真实历史演练时，使用独立目录补取缺失组件，不写生产档位完成状态：
+
+```bash
+python scripts/collect_historical_industry.py --dates <5个交易日> --project-root <KStock目录> --artifact-root <隔离目录> --output industry-days.json
+python scripts/collect_historical_stock.py --dates <5个交易日> --project-root <KStock目录> --artifact-root <隔离目录> --output stock-days.json
+python scripts/calculate_monitor.py industry-5d --input industry-days.json --output industry-5d.json
+python scripts/calculate_monitor.py stock-5d --input stock-days.json --output stock-5d.json
+```
+
+构建报告时传入 `--simulation-label "历史演练 YYYY-MM-DD"`。两张卡必须分别通过 `render_feishu_card.py --part 1/2` 生成，再用 `stage_rendered_cards.py` 原样装入报告包；只有用户明确授权后才调用 `deliver_report.py`。历史演练报告不得更新或占用对应历史生产档位。
