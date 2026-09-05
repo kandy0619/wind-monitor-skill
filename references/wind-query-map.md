@@ -118,6 +118,12 @@ A2按A1的10个完整行业名称精确匹配。Wind可能因完整名称包含�
 
 ## 状态文件
 
+### 脱敏原始回包
+
+路径：`.codex/automation-state/a-share-monitor-raw/YYYYMMDD/HHMM/<request-id>.json`
+
+每次Wind调用先保存脱敏后的原始成功或错误信封、请求标识、服务/工具、计划档位、实际调用时间和SHA-256。不得保存Key、令牌、飞书凭据或接收标识。规范化失败仍保留该文件，供确定性适配和大模型二次适配重放。
+
 ### 盘中状态
 
 路径：`.codex/automation-state/a-share-watchlist-main-flow-10m.json`
@@ -140,4 +146,4 @@ A2按A1的10个完整行业名称精确匹配。Wind可能因完整名称包含�
 
 路径：`.codex/automation-state/a-share-monitor-run-slots/YYYYMMDD.json`
 
-以计划档位为键，保存各模式的成功状态，至少包含 `planned_time`、`mode`、`completed_at`、`wind_data_time`。同一交易日、计划档位和模式只成功处理一次；只有规定的业务状态文件全部落盘后才写成功状态。失败不得占用档位。
+使用 `monitor_runtime.py` 的Schema v2，以 `HH:MM:mode` 为键保存 `planned_time`、`mode`、`status`、`triggered_at`、`last_attempt_at`、`completed_at`、`wind_data_time`、`failure_stage`、`last_error`、`artifacts` 和 `delivery`。同一交易日、计划档位和模式只成功处理一次；只有规定的业务状态文件全部落盘后才写成功状态。失败不得占用档位。15:00键为 `15:00:intraday`，15:10键为 `15:10:close`。
