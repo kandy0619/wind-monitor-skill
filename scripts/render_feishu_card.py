@@ -23,6 +23,12 @@ STATUS_COLORS = {
     "基准建立中": "orange",
     "样本不足": "orange",
     "Wind未返回": "orange",
+    "优先观察": "red",
+    "等待确认": "orange",
+    "避免追高": "orange",
+    "持仓风控": "green",
+    "低优先级": "neutral",
+    "数据不足": "orange",
 }
 
 INTRADAY_REPORT_TYPE = "intraday"
@@ -68,14 +74,11 @@ def report_contract(current: dict[str, Any]) -> tuple[str, str | None]:
             raise ValueError(
                 "report contract mismatch: 15:10 requires report_type=close_summary"
             )
-        if card_mode in (None, "close-overview"):
-            if "top10" not in current:
-                raise ValueError("15:10 close overview payload is missing top10")
-            return CLOSE_REPORT_TYPE, "close-overview"
-        if card_mode == "close-stock-5d":
-            if "stock_5d" not in current:
-                raise ValueError("15:10 close stock payload is missing stock_5d")
-            return CLOSE_REPORT_TYPE, card_mode
+        if card_mode in (None, "close-summary"):
+            missing = [key for key in ("top10", "industry_5d", "stock_5d") if key not in current]
+            if missing:
+                raise ValueError(f"15:10 close summary payload is missing: {', '.join(missing)}")
+            return CLOSE_REPORT_TYPE, "close-summary"
         raise ValueError(f"unsupported 15:10 close card_mode: {card_mode!r}")
 
     raise ValueError(f"unsupported report planned_time: {planned_time!r}")
@@ -149,6 +152,10 @@ def state(current: float, previous: float | None) -> str:
 
 def status_tag(value: str) -> list[dict[str, str]]:
     return [{"text": value, "color": STATUS_COLORS.get(value, "neutral")}]
+
+
+def status_tags(*values: str) -> list[dict[str, str]]:
+    return [status_tag(value)[0] for value in values]
 
 
 def table(
@@ -358,204 +365,170 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
     }
 
 
+def close_action(stock: dict[str, Any]) -> str:
+    """Return a transparent next-session action label from close-only facts."""
+    trend = str(stock.get("trend") or "样本不足")
+    change_pct = stock.get("change_pct")
+    if trend in {"持续加仓", "波动加仓"} and change_pct is not None and float(change_pct) >= 7.0:
+        return "避免追高"
+    if trend == "持续加仓":
+        return "优先观察"
+    if trend == "波动加仓":
+        return "等待确认"
+    if trend in {"持续减仓", "波动减仓"}:
+        return "持仓风控"
+    if trend == "基本稳定":
+        return "低优先级"
+    return "数据不足"
+
+
+def consensus_rankings(data: dict[str, Any], *, entity_type: str, direction: str) -> list[dict[str, Any]]:
+    """Rank entities appearing across net, day-count and amount Top-5 lists."""
+    if direction not in {"add", "reduce"}:
+        raise ValueError(f"unsupported consensus direction: {direction}")
+    keys = [
+        (f"net_{direction}_top5", "净额"),
+        (f"{direction}_days_top5", "天数"),
+        (f"{direction}_amount_top5", "金额"),
+    ]
+    ranked: dict[str, dict[str, Any]] = {}
+    for key, dimension in keys:
+        for rank, item in enumerate(data.get(key, [])[:5], 1):
+            if entity_type == "industry":
+                identity = str(item.get("industry") or "")
+                name = terminal_industry(identity)
+                code = ""
+            else:
+                code = str(item.get("code") or "")
+                name = str(item.get("name") or code or "Wind未返回")
+                identity = code or name
+            if not identity:
+                continue
+            entry = ranked.setdefault(identity, {
+                "identity": identity, "name": name, "code": code,
+                "score": 0, "dimensions": [],
+            })
+            entry["score"] += 6 - rank
+            if dimension not in entry["dimensions"]:
+                entry["dimensions"].append(dimension)
+    return sorted(
+        ranked.values(),
+        key=lambda item: (-item["score"], -len(item["dimensions"]), item["identity"]),
+    )
+
+
+def consensus_text(item: dict[str, Any] | None, *, show_code: bool) -> str:
+    if not item:
+        return "Wind未返回"
+    hits = len(item["dimensions"])
+    strength = "强共振" if hits == 3 else "中共振" if hits == 2 else "单项领先"
+    identity = item["name"]
+    if show_code and item.get("code"):
+        identity = f"{identity}（{item['code']}）"
+    evidence = "·".join(item["dimensions"])
+    return f"**{identity}**｜{strength}\n{evidence}｜{item['score']}分"
+
+
+def consensus_rows(data: dict[str, Any], *, entity_type: str) -> list[dict[str, Any]]:
+    add = consensus_rankings(data, entity_type=entity_type, direction="add")[:3]
+    reduce = consensus_rankings(data, entity_type=entity_type, direction="reduce")[:3]
+    return [
+        {
+            "rank": str(rank + 1),
+            "add": consensus_text(add[rank] if rank < len(add) else None, show_code=entity_type == "stock"),
+            "reduce": consensus_text(reduce[rank] if rank < len(reduce) else None, show_code=entity_type == "stock"),
+        }
+        for rank in range(max(len(add), len(reduce), 1))
+    ]
+
+
 def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
     report_type, card_mode = report_contract(current)
-    if report_type != CLOSE_REPORT_TYPE or card_mode != "close-overview":
-        raise ValueError("close overview renderer received an incompatible payload")
+    if report_type != CLOSE_REPORT_TYPE or card_mode != "close-summary":
+        raise ValueError("close summary renderer received an incompatible payload")
     top10 = list(current.get("top10", []))
     if not top10:
         raise ValueError("close payload has no top10 rows")
 
+    industry_5d = current["industry_5d"]
+    stock_5d = current["stock_5d"]
+    industry_dates = list(industry_5d.get("trade_dates", []))
+    stock_dates = list(stock_5d.get("trade_dates", []))
+    if len(industry_dates) != 5 or industry_dates != stock_dates:
+        raise ValueError("close summary requires one identical five-day industry and stock window")
+
     total = float(current["top10_main_net_inflow_yi"])
     average_pct = float(current["top10_average_change_pct"])
-    leading_trend = str(top10[0].get("trend") or "样本不足")
     slot = str(current["planned_time"])
     header_color = "red" if total > 0 else "green" if total < 0 else "blue"
+    additive = sum(1 for stock in top10 if stock.get("trend") in {"持续加仓", "波动加仓"})
 
     rows = []
+    actions: dict[str, list[str]] = {}
     for rank, stock in enumerate(top10, 1):
         trend = str(stock.get("trend") or "样本不足")
+        action = close_action(stock)
+        name = str(stock.get("name") or "Wind未返回")
+        actions.setdefault(action, []).append(name)
         rows.append({
             "rank": f"**{rank}**" if rank <= 5 else str(rank),
-            "stock": str(stock.get("name") or "Wind未返回"),
+            "stock": name,
             "main": industry_amount(float(stock["main_net_inflow_yi"])),
             "pct": signed(float(stock["change_pct"]), "%"),
-            "trend": status_tag(trend),
+            "decision": status_tags(trend, action),
         })
 
-    columns = [
-        {
-            "name": "rank", "display_name": "#", "data_type": "lark_md",
-            "width": "8%", "horizontal_align": "center",
-        },
-        {"name": "stock", "display_name": "股票", "data_type": "text", "width": "22%"},
-        {"name": "main", "display_name": "主力净流入", "data_type": "lark_md", "width": "23%"},
-        {"name": "pct", "display_name": "涨跌", "data_type": "lark_md", "width": "17%"},
-        {"name": "trend", "display_name": "全日趋势", "data_type": "options", "width": "30%"},
+    focus = (actions.get("优先观察") or [])[:3]
+    wait = (actions.get("等待确认") or [])[:3]
+    risk = (actions.get("避免追高") or [])[:3] + (actions.get("持仓风控") or [])[:3]
+    decision_lines = [
+        f"🎯 **优先观察：** {'、'.join(focus) if focus else '暂无'}",
+        f"⏳ **等待确认：** {'、'.join(wait) if wait else '暂无'}",
+        f"⚠️ **风险提示：** {'、'.join(risk[:4]) if risk else '暂无'}",
     ]
     summary = (
-        f"🔎 四板块各 Top 5 候选合并后取前 {len(top10)} 名；"
-        f"榜首为{top10[0].get('name', 'Wind未返回')}，全日趋势为{leading_trend}。"
+        f"🔎 Top {len(top10)}合计{'净流入' if total >= 0 else '净流出'}，"
+        f"其中{additive}只呈现加仓趋势；次日先看资金延续，再结合价格确认，避免仅凭单日排名追涨。"
     )
+    columns = [
+        {"name": "rank", "display_name": "#", "data_type": "lark_md", "width": "7%", "horizontal_align": "center"},
+        {"name": "stock", "display_name": "股票", "data_type": "text", "width": "20%"},
+        {"name": "main", "display_name": "主力净流入", "data_type": "lark_md", "width": "22%"},
+        {"name": "pct", "display_name": "涨跌", "data_type": "lark_md", "width": "16%"},
+        {"name": "decision", "display_name": "趋势 / 次日参考", "data_type": "options", "width": "35%"},
+    ]
+    consensus_columns = [
+        {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
+        {"name": "add", "display_name": "加仓共振", "data_type": "lark_md", "width": "46%"},
+        {"name": "reduce", "display_name": "减仓共振", "data_type": "lark_md", "width": "47%"},
+    ]
+    window = f"{industry_dates[0]} 至 {industry_dates[-1]}"
     elements = [
         {"tag": "div", "fields": [
             {"is_short": True, "text": {"tag": "lark_md", "content": f"**💰 Top 10 合计**\n{industry_amount(total)}"}},
             {"is_short": True, "text": {"tag": "lark_md", "content": f"**📈 平均涨跌**\n{signed(average_pct, '%')}"}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": f"**🏆 榜首趋势**\n{leading_trend}"}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": f"**🔥 加仓趋势**\n{additive}/{len(top10)}"}},
         ]},
         {"tag": "div", "text": {"tag": "lark_md", "content": summary}},
+        {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(decision_lines)}},
         {"tag": "hr"},
-        section("📋 四板块各Top 5候选合并榜"),
+        section("📋 收盘 Top 10｜趋势与次日参考"),
         table(columns, rows, row_height="middle"),
+        {"tag": "hr"},
+        section("🏭 近5日行业三维共振 Top 3"),
+        table(consensus_columns, consensus_rows(industry_5d, entity_type="industry"), row_height="middle"),
+        {"tag": "hr"},
+        section("🎯 近5日个股三维共振 Top 3"),
+        table(consensus_columns, consensus_rows(stock_5d, entity_type="stock"), row_height="middle"),
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": f"5日区间：{window}。共振分=三类Top5名次积分之和（第1至5名为5至1分）。"}]},
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "行动标签仅基于资金趋势与当日涨跌：涨幅≥7%的加仓股标记避免追高；不是无条件买卖指令。"}]},
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]},
     ]
-    industry_5d = current.get("industry_5d")
-    if industry_5d:
-        net_rows = []
-        for direction, key in (("加仓", "net_add_top5"), ("减仓", "net_reduce_top5")):
-            for rank, item in enumerate(industry_5d.get(key, []), 1):
-                net_rows.append({
-                    "direction": direction,
-                    "rank": str(rank),
-                    "industry": terminal_industry(str(item["industry"])),
-                    "amount": industry_amount(industry_net_yi(item)),
-                })
-        pair_rows = []
-        add_days = industry_5d.get("add_days_top5", [])
-        reduce_days = industry_5d.get("reduce_days_top5", [])
-        for rank in range(max(len(add_days), len(reduce_days))):
-            add = add_days[rank] if rank < len(add_days) else None
-            reduce = reduce_days[rank] if rank < len(reduce_days) else None
-            pair_rows.append({
-                "rank": str(rank + 1),
-                "add": f"{terminal_industry(str(add['industry']))}｜{industry_days(add, 'add')}天" if add else "Wind未返回",
-                "reduce": f"{terminal_industry(str(reduce['industry']))}｜{industry_days(reduce, 'reduce')}天" if reduce else "Wind未返回",
-            })
-        amount_rows = []
-        add_amount = industry_5d.get("add_amount_top5", [])
-        reduce_amount = industry_5d.get("reduce_amount_top5", [])
-        for rank in range(max(len(add_amount), len(reduce_amount))):
-            add = add_amount[rank] if rank < len(add_amount) else None
-            reduce = reduce_amount[rank] if rank < len(reduce_amount) else None
-            amount_rows.append({
-                "rank": str(rank + 1),
-                "add": f"{terminal_industry(str(add['industry']))}｜+{industry_accumulated_yi(add, 'add'):.1f}亿" if add else "Wind未返回",
-                "reduce": f"{terminal_industry(str(reduce['industry']))}｜-{industry_accumulated_yi(reduce, 'reduce'):.1f}亿" if reduce else "Wind未返回",
-            })
-        elements.extend([
-            {"tag": "hr"},
-            section("📊 近5日净加减仓 Top 5"),
-            table([
-                {"name": "direction", "display_name": "方向", "data_type": "text", "width": "15%"},
-                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
-                {"name": "industry", "display_name": "行业", "data_type": "text", "width": "47%"},
-                {"name": "amount", "display_name": "5日净额", "data_type": "lark_md", "width": "30%"},
-            ], net_rows),
-            {"tag": "hr"},
-            section("📅 近5日加减仓天数 Top 5"),
-            table([
-                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
-                {"name": "add", "display_name": "加仓行业｜天数", "data_type": "text", "width": "46%"},
-                {"name": "reduce", "display_name": "减仓行业｜天数", "data_type": "text", "width": "46%"},
-            ], pair_rows),
-            {"tag": "hr"},
-            section("💰 近5日加减仓金额 Top 5"),
-            table([
-                {"name": "rank", "display_name": "#", "data_type": "text", "width": "8%"},
-                {"name": "add", "display_name": "累计加仓", "data_type": "text", "width": "46%"},
-                {"name": "reduce", "display_name": "累计减仓", "data_type": "text", "width": "46%"},
-            ], amount_rows),
-        ])
-    elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": f"数据时间：{current['wind_data_time']}"}]})
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": header_color,
-            "title": {"tag": "plain_text", "content": f"📊 {slot} 收盘主力榜｜{leading_trend}"},
-        },
-        "elements": elements,
-    }
-
-
-def stock_label(item: dict[str, Any] | None) -> str:
-    if not item:
-        return "Wind未返回"
-    return f"{item.get('name') or 'Wind未返回'}（{item['code']}）"
-
-
-def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
-    report_type, card_mode = report_contract(current)
-    if report_type != CLOSE_REPORT_TYPE or card_mode != "close-stock-5d":
-        raise ValueError("close stock renderer received an incompatible payload")
-    stock_5d = current.get("stock_5d") or current
-    trade_dates = stock_5d.get("trade_dates", [])
-    if len(trade_dates) != 5:
-        raise ValueError("stock 5d payload must contain exactly five trade dates")
-
-    net_rows = []
-    for direction, key in (("加仓", "net_add_top5"), ("减仓", "net_reduce_top5")):
-        for rank, item in enumerate(stock_5d.get(key, []), 1):
-            net_rows.append({
-                "direction": direction,
-                "rank": str(rank),
-                "stock": stock_label(item),
-                "amount": yuan(float(item["net_yuan"])),
-            })
-
-    def paired_rows(add_key, reduce_key, formatter):
-        add_rows = stock_5d.get(add_key, [])
-        reduce_rows = stock_5d.get(reduce_key, [])
-        rows = []
-        for rank in range(max(len(add_rows), len(reduce_rows))):
-            add = add_rows[rank] if rank < len(add_rows) else None
-            reduce = reduce_rows[rank] if rank < len(reduce_rows) else None
-            rows.append({
-                "rank": str(rank + 1),
-                "add": formatter(add, True) if add else "Wind未返回",
-                "reduce": formatter(reduce, False) if reduce else "Wind未返回",
-            })
-        return rows
-
-    days_rows = paired_rows(
-        "add_days_top5", "reduce_days_top5",
-        lambda item, add: f"{stock_label(item)}｜{item['add_days' if add else 'reduce_days']}天",
-    )
-    amount_rows = paired_rows(
-        "add_amount_top5", "reduce_amount_top5",
-        lambda item, add: f"{stock_label(item)}｜{'+' if add else '-'}{item['add_yuan' if add else 'reduce_yuan'] / 100_000_000:.1f}亿",
-    )
-    window = f"{trade_dates[0]} 至 {trade_dates[-1]}"
-    elements = [
-        {"tag": "div", "text": {"tag": "lark_md", "content": f"**统计区间：** {window}\n仅纳入5个交易日逐日资金均完整的A股。"}},
-        {"tag": "hr"},
-        section("📊 个股近5日净加减仓 Top 5"),
-        table([
-            {"name": "direction", "display_name": "方向", "data_type": "text", "width": "13%"},
-            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
-            {"name": "stock", "display_name": "股票", "data_type": "text", "width": "50%"},
-            {"name": "amount", "display_name": "5日净额", "data_type": "lark_md", "width": "30%"},
-        ], net_rows),
-        {"tag": "hr"},
-        section("📅 个股近5日加减仓天数 Top 5"),
-        table([
-            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
-            {"name": "add", "display_name": "加仓个股｜天数", "data_type": "text", "width": "46%"},
-            {"name": "reduce", "display_name": "减仓个股｜天数", "data_type": "text", "width": "47%"},
-        ], days_rows),
-        {"tag": "hr"},
-        section("💰 个股近5日加减仓金额 Top 5"),
-        table([
-            {"name": "rank", "display_name": "#", "data_type": "text", "width": "7%"},
-            {"name": "add", "display_name": "累计加仓", "data_type": "text", "width": "46%"},
-            {"name": "reduce", "display_name": "累计减仓", "data_type": "text", "width": "47%"},
-        ], amount_rows),
-    ]
-    if stock_5d.get("window_note"):
-        elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": stock_5d["window_note"]}]})
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "blue",
-            "title": {"tag": "plain_text", "content": f"📊 {current['planned_time']} 收盘｜近5日个股资金统计"},
+            "title": {"tag": "plain_text", "content": f"📊 {slot} 收盘资金决策摘要"},
         },
         "elements": elements,
     }
@@ -592,14 +565,10 @@ def build_card(current: dict[str, Any], previous: dict[str, Any] | None) -> dict
     report_type, card_mode = report_contract(current)
     if report_type == INTRADAY_REPORT_TYPE:
         card = build_intraday_card(current, previous)
-    elif card_mode == "close-overview":
+    elif card_mode == "close-summary":
         if previous is not None:
             raise ValueError("15:10 close report must not receive --previous")
         card = build_close_card(current)
-    elif card_mode == "close-stock-5d":
-        if previous is not None:
-            raise ValueError("15:10 close report must not receive --previous")
-        card = build_close_stock_5d_card(current)
     else:
         raise ValueError("report contract did not select a supported card layout")
     return annotate_report_part(card, current)
@@ -610,12 +579,12 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--previous", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--part", type=int, choices=(1, 2))
+    parser.add_argument("--part", type=int, choices=(1,))
     args = parser.parse_args()
     current = json.loads(args.input.read_text(encoding="utf-8"))
     if current.get("report_type") == "close_summary" and "card_inputs" in current:
         if args.part is None:
-            raise ValueError("a close_summary package requires --part 1 or --part 2")
+            raise ValueError("a close_summary package requires --part 1")
         current = current["card_inputs"][args.part - 1]
     elif args.part is not None:
         raise ValueError("--part is only valid for a close_summary package")

@@ -9,7 +9,7 @@
 ## 不可变业务契约
 
 - 15:00是最后一个标准10分钟盘中档：`report_type=intraday`，读取上一成功盘中档，生成一张盘中四表卡。
-- 15:10是独立统一收盘总结：`report_type=close_summary`，使用15:00收盘值、固定趋势样本、近5日行业和个股统计，形成一个逻辑报告与两个飞书分片。
+- 15:10是独立统一收盘总结：`report_type=close_summary`，使用15:00收盘值、固定趋势样本、近5日行业和个股统计，形成一个逻辑报告与一张飞书决策摘要卡；全量明细进入Codex审计版和持久化数据。
 - 计划档位、报告类型、字段结构和卡片模式必须一致；冲突时进入`pending_render/report_contract_mismatch`，不得猜测、改标题或发送。
 - Wind是唯一市场数据源；原始回包先脱敏落盘，规范化失败与Wind无数据严格区分。
 - 飞书只向启用MonitorTask配置的唯一群聊发送精简卡；Codex展示精简版和完整审计版。
@@ -50,11 +50,11 @@ Skill以Python包或固定CLI边界向KStock暴露能力。KStock服务只传入
 
 ### `wind_flow_rankings`
 
-保存行业双榜、行业个股Top 3、四板块候选、收盘Top 10、近5日行业/个股六类排名。字段包括`run_id`、`ranking_type`、`direction`、`rank`、`entity_code/name`、`source_board`、`metric_value`、`window_start/end`和`evidence_observation_ids`。
+保存行业双榜、行业个股Top 3、四板块候选、收盘Top 10、近5日行业/个股六类排名及展示层三维共振。字段包括`run_id`、`ranking_type`、`direction`、`rank`、`entity_code/name`、`source_board`、`metric_value`、`window_start/end`、`evidence_observation_ids`、`consensus_score`和`consensus_dimensions`。收盘Top 10另存`decision_label`与`decision_rule_version`，保证历史报告可按当时规则复现。
 
 ### `wind_monitor_reports`
 
-保存同一计算结果派生的Codex精简版、完整审计版和飞书逻辑报告。字段包括`run_id`、`report_id`、`report_type`、`planned_time`、`normalized_payload`、`calculated_payload`、`concise_markdown`、`audit_markdown`、`required_parts`、`quality_status`。`15:00/intraday/1片`与`15:10/close_summary/2片`使用数据库约束或应用约束锁死。
+保存同一计算结果派生的Codex精简版、完整审计版和飞书逻辑报告。字段包括`run_id`、`report_id`、`report_type`、`planned_time`、`normalized_payload`、`calculated_payload`、`concise_markdown`、`audit_markdown`、`required_parts`、`quality_status`。`15:00/intraday/1片`与`15:10/close_summary/1片`使用数据库约束或应用约束锁死。
 
 ### `wind_monitor_deliveries`
 
@@ -93,18 +93,20 @@ scheduled -> collecting -> normalizing -> calculating -> persisted
 - `FeishuReportDeliveryAdapter`：只解析启用任务中的唯一`feishu_chat_id`，调用现有`send_card`并保存分片结果；禁止同时发送个人账号。
 - `WindOutcomeService`：盘后按交易日历补齐未来1/3/5/10/20/60交易日结果，供回测与研究API使用。
 
-现有通用MonitorTask与MonitorReport可保留为任务配置和页面入口，但不应继续用一个`feishu_sent`布尔值表示多分片交付，也不能用小时/每日频率模型承载30个固定业务档位。应新增上述资金监控实体，并通过`task_id`关联现有任务。
+现有通用MonitorTask与MonitorReport可保留为任务配置和页面入口，但不应只用一个`feishu_sent`布尔值表示可恢复交付阶段，也不能用小时/每日频率模型承载30个固定业务档位。应新增上述资金监控实体，并通过`task_id`关联现有任务。
 
 ## 研究与回归测试
 
-首期事件定义：收盘Top 10入榜。默认入场规则为下一交易日开盘，持有期为1、3、5、10、20和60个交易日；同时计算沪深300或用户选择基准的超额收益。分层维度包括综合排名、资金趋势、主力净流入分位、涨跌幅分位、所属行业和市场板块。
+首期事件定义：收盘Top 10入榜。默认入场规则为下一交易日开盘，持有期为1、3、5、10、20和60个交易日；同时计算沪深300或用户选择基准的超额收益。分层维度包括综合排名、资金趋势、主力净流入分位、涨跌幅分位、所属行业、市场板块、三维共振分和次日参考标签。报告中的“优先观察/等待确认/避免追高/持仓风控”必须按版本回测命中率、超额收益、MFE和MAE，达到最小样本门槛后再讨论升级为个性化交易规则。
+
+真正面向个人持仓的卖出或减仓建议需要额外关联KStock持仓、成本价、当前仓位、单股风险上限和用户风险等级；Skill的通用收盘卡只输出市场资金层面的条件标签，不把未知持仓假设成事实。KStock融合后可在卡片末尾增加“持仓命中”小节，但必须与通用Top 10信号分层展示并保留触发证据。
 
 避免未来函数：排名数据只使用报告生成前已持久化的Wind数据；价格复权方式、停牌、涨跌停无法成交和退市处理必须版本化。研究结果按数据版本可重复计算，不覆盖旧版本。
 
 ## API与页面建议
 
 - 任务页：档位运行时间线、失败阶段、待重试、Skill/适配器版本。
-- 报告页：盘中与收盘类型分栏；15:00明确标识“盘中”，15:10标识“收盘总结”；展示飞书分片状态。
+- 报告页：盘中与收盘类型分栏；15:00明确标识“盘中”，15:10标识“收盘总结”；展示飞书卡片交付状态。
 - 数据质量页：Wind请求错误分类、字段映射变化、LLM适配候选及审批状态。
 - 研究页：Top 10事件样本数、胜率、均值/中位数收益、超额收益、MFE/MAE、分组对比与样本明细。
 
@@ -113,14 +115,14 @@ scheduled -> collecting -> normalizing -> calculating -> persisted
 1. **契约固化**：先在Skill完成15:00/15:10硬隔离、Schema校验和离线回放，本次改造属于此阶段。
 2. **影子落库**：KStock新增表与Repository，Skill文件状态仍为主，数据库同步写入，连续5个交易日比对哈希与数量。
 3. **数据库主存**：数据库成为运行和研究事实库，Skill继续输出可移植JSON审计包；文件仅作应急导出。
-4. **原生调度与交付**：KStock调度器调用Skill路由，接管锁、重试与分片发送，移除长自动化提示词依赖。
+4. **原生调度与交付**：KStock调度器调用Skill路由，接管锁、重试与卡片发送，移除长自动化提示词依赖。
 5. **事件研究**：上线结果补齐、回归测试API和页面，历史回填另行授权执行。
 
 ## 验收门槛
 
-- 15:00只产生`intraday`、一张四表卡，标题不含“收盘”；15:10只产生`close_summary`、同报告ID两张卡。
+- 15:00只产生`intraday`、一张四表卡，标题不含“收盘”；15:10只产生`close_summary`、同报告ID一张决策摘要卡。
 - 任意混淆载荷在发送前失败并进入`pending_render`，不能通过字段形状或标题修补绕过。
-- 相同档位并发触发只有一个逻辑运行；发送第二片失败时只补发第二片。
+- 相同档位并发触发只有一个逻辑运行；发送失败时复用已渲染并持久化的同一卡片重试，不重复取Wind或重新计算。
 - Wind原始回包、规范化值、排名、报告和未来收益可从数据库追溯到同一run与版本。
 - 连续5个交易日影子运行的盘中/收盘数值、排名、卡片哈希和状态与Skill文件流程一致。
 - 日志、API和导出均不暴露Wind Key、飞书密钥或接收标识。

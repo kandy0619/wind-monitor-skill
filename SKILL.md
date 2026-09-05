@@ -83,17 +83,17 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 7. 把原始榜单、样本、计算结果和限制保存到 `.codex/automation-state/a-share-close-main-add-top10/YYYYMMDD.json`。
 8. 从同一份收盘结果生成精简版和完整审计版。严格按参考规格的“双渠道输出”投递：飞书只发送精简版，Codex先展示精简版再展示完整审计版。
 9. 查询包含当日在内的最近5个A股交易日全部Wind末级行业日频主力净流入额，每个交易日应覆盖相同的完整行业集合；保存每日原始行业表。运行 `python3 scripts/calculate_monitor.py industry-5d --input <industry-days.json> --output <industry-5d.json>`，生成近5日净加仓/净减仓Top 5、加仓/减仓天数Top 5、累计加仓/累计减仓金额Top 5，并合并进收盘精简版、完整审计版和飞书卡片。不得只用每日Top 5样本推算全行业排名。
-10. 对全部A股通过 `stock_data.search_stocks` 执行六次单方向跨日排名：5日净流入额、净流出额、加仓天数、减仓天数、累计加仓金额、累计减仓金额，各取Top 5。不要在一个问题中合并正反方向；Wind曾出现重复同一组结果。随后按三组候选分别补查5个交易日逐日主力净流入额与Wind完整行业，只纳入5日逐日值均完整的股票；使用 `python3 scripts/calculate_monitor.py stock-5d --input <stock-candidates.json> --output <stock-5d.json>` 本地复算、去重和稳定排序。优先使用包含收盘日的最近5个完整交易日；若当日日频尚不可得，则改用Wind最近5个完整交易日，并在精简版、审计版和第二张飞书卡片明确统计区间。不得用空值补0，也不得把不足5日的新股或停牌股纳入排名。
+10. 对全部A股通过 `stock_data.search_stocks` 执行六次单方向跨日排名：5日净流入额、净流出额、加仓天数、减仓天数、累计加仓金额、累计减仓金额，各取Top 5。不要在一个问题中合并正反方向；Wind曾出现重复同一组结果。随后按三组候选分别补查5个交易日逐日主力净流入额与Wind完整行业，只纳入5日逐日值均完整的股票；使用 `python3 scripts/calculate_monitor.py stock-5d --input <stock-candidates.json> --output <stock-5d.json>` 本地复算、去重和稳定排序。优先使用包含收盘日的最近5个完整交易日；若当日日频尚不可得，则改用Wind最近5个完整交易日，并在精简版、审计版和唯一收盘飞书卡片明确统计区间。不得用空值补0，也不得把不足5日的新股或停牌股纳入排名。
 
 ## 双渠道交付
 
 - 先完成完整Wind取数、计算和状态落盘，再由同一结果派生两个展示版本；不得为了精简展示减少查询、截断状态或丢弃原始字段。
 - 飞书使用 KStock 的 `backend/services/feishu_bot.py` `send_card`，只推送参考规格定义的可视化精简卡片。严格使用参考规格规定的标题主题色、图标、涨跌箭头、彩色数值、状态标签、紧凑表格和末级行业名；不得退化为大段纯文字，不得把完整审计表附在飞书卡片后，也不得发送第二条完整报告。
-- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。报告类型只由显式的 `planned_time + report_type + card_mode` 契约决定，禁止根据是否出现 `top10`、`stock_5d` 等字段猜测类型。盘中档写 `report_type=intraday` 并追加 `--previous <previous-normalized.json>`；当天首档可省略 `--previous`。15:10写 `report_type=close_summary`，省略 `--previous`，第一片使用 `card_mode=close-overview`（或省略该字段），第二片使用 `card_mode=close-stock-5d`。契约冲突必须记为 `pending_render` / `report_contract_mismatch` 并停止发送，不能自动改标题、换模板或降级。收盘个股统计因单卡表格上限自然拆为第二张精简卡片，两张均属于同一15:10报告；不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
+- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。报告类型只由显式的 `planned_time + report_type + card_mode` 契约决定，禁止根据是否出现 `top10`、`stock_5d` 等字段猜测类型。盘中档写 `report_type=intraday` 并追加 `--previous <previous-normalized.json>`；当天首档可省略 `--previous`。15:10写 `report_type=close_summary`、`card_mode=close-summary`并省略 `--previous`；载荷必须同时包含Top 10、行业5日和个股5日结果，渲染成唯一一张“收盘资金决策摘要”卡。契约冲突必须记为 `pending_render` / `report_contract_mismatch` 并停止发送，不能自动改标题、换模板或降级。完整六类榜单仍保存在状态和Codex审计版，飞书只展示行业与个股三维共振Top 3，不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
 - Codex 对报告档先展示与飞书信息等价的精简版，再以 `完整报告（审计）` 为标题展示参考规格要求的全部表格和必要限制。精简版不能替代完整审计版。
 - 纯取样档、已完成的重复档和非交易日继续静默，不输出精简版或完整版。报告档不得仅因触发延迟、执行耗时、进入下一档或发送失败而静默；必须保留 `pending` 并继续完成飞书交付。
 - 报告档只有在Wind取数、计算、规定状态落盘和飞书精简卡片发送全部成功后才标记完成。飞书失败时保留已落盘数据和待发送卡片，记录为 `pending_send`；后续触发优先直接重试发送，避免无必要地重复Wind取数。没有可复用结果时才从失败阶段继续执行。
-- 15:10使用 `scripts/build_close_report.py` 合并为一个带稳定 `report_id` 的逻辑报告，再用 `scripts/deliver_report.py` 依次渲染、校验和发送两张精简卡。每张成功后立即落盘；重试只补发未完成分片。两张都成功前，15:10不得标记完成。
+- 15:10使用 `scripts/build_close_report.py` 合并为一个带稳定 `report_id` 的逻辑报告，再用 `scripts/deliver_report.py` 渲染、校验和发送唯一一张精简决策卡。发送成功前，15:10不得标记完成；失败时复用已持久化卡片重试，不重复取Wind。
 - 飞书接收群必须从KStock现有启用且 `feishu_chat_id` 非空的 `MonitorTask` 动态读取，优先使用任务名 `监控-神龙7-全盘`，并使用 `receive_id_type=chat_id`。每个报告档只向该群发送精简卡片，不再向 `feishu_user_id` 或其它接收目标发送；不得在报告、日志或Codex输出中暴露接收群标识。
 
 ## 数据纪律
@@ -110,7 +110,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 - 指数接口只返回主力时，明确注明“指数接口仅提供主力口径”。
 - 四指数简单相加存在成分重叠，不等于全A去重总额。
 - 主力是Wind大额成交算法口径，不代表真实机构账户身份。
-- 不给买卖建议。
+- 不下达无条件买卖指令。收盘精简版可按确定性规则输出“优先观察、等待确认、避免追高、持仓风控、低优先级、数据不足”等次日参考标签，必须同时展示资金趋势和触发口径；真实个性化买卖还需结合持仓成本、仓位和风险约束。
 - 不把“接口没有提供完整性声明”作为用户提示；只有实际少返、缺失或时间异常影响结果时才显示对应事实。
 - 不在飞书精简版、Codex精简版或完整审计版中显示固定的数据来源声明或主力口径免责声明；这些信息只保留为技能内部数据纪律。
 

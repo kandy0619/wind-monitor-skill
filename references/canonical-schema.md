@@ -29,7 +29,7 @@ Wind原始回包的信封、字段名、表格形态和单位元数据可能变�
 Wind profile规范化完成后，组装报告载荷时必须增加显式业务信封；渲染器不从业务字段形状推断报告类型。
 
 - 盘中：`report_type=intraday`，`planned_time`必须属于标准10分钟盘中档（包含15:00），不得包含`top10`、`stock_5d`或收盘`card_mode`。
-- 收盘：`report_type=close_summary`，`planned_time=15:10`。第一片`card_mode=close-overview`（可省略），第二片`card_mode=close-stock-5d`。
+- 收盘：`report_type=close_summary`，`planned_time=15:10`，`card_mode=close-summary`（可省略），且同一载荷同时包含`top10`、`industry_5d`和`stock_5d`，只生成一张决策摘要卡。
 - 上一档比较载荷也必须是`report_type=intraday`并保留它自己的`planned_time`。
 - 契约不一致时分类为`report_contract_mismatch`，进入`pending_render`；不得自动纠正、按形状猜测或发送。
 

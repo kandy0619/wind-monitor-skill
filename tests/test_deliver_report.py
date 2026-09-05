@@ -12,6 +12,9 @@ from kstock_feishu_delivery import DeliveryError
 
 
 def minimal_input(title):
+    dates = ["2026-08-07", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"]
+    industry = {"industry": "一级--测试行业", "net_yuan": 1.0, "add_days": 4, "reduce_days": 1, "add_yuan": 2.0, "reduce_yuan": 1.0}
+    stock = {"code": "000001.SZ", "name": title, "net_yuan": 1.0, "add_days": 4, "reduce_days": 1, "add_yuan": 2.0, "reduce_yuan": 1.0}
     return {
         "report_type": "close_summary",
         "planned_time": "15:10",
@@ -21,6 +24,18 @@ def minimal_input(title):
         "top10": [{"rank": 1, "name": title, "code": "000001.SZ", "main_net_inflow_yi": 1.0, "change_pct": 1.0, "trend": "持续加仓"}],
         "top10_main_net_inflow_yi": 1.0,
         "top10_average_change_pct": 1.0,
+        "industry_5d": {
+            "trade_dates": dates,
+            "net_add_top5": [industry], "net_reduce_top5": [industry],
+            "add_days_top5": [industry], "reduce_days_top5": [industry],
+            "add_amount_top5": [industry], "reduce_amount_top5": [industry],
+        },
+        "stock_5d": {
+            "trade_dates": dates,
+            "net_add_top5": [stock], "net_reduce_top5": [stock],
+            "add_days_top5": [stock], "reduce_days_top5": [stock],
+            "add_amount_top5": [stock], "reduce_amount_top5": [stock],
+        },
     }
 
 

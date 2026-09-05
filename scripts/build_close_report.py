@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one auditable 15:10 close-report package and its two card inputs."""
+"""Build one auditable 15:10 close-report package and its decision card input."""
 
 from __future__ import annotations
 
@@ -81,26 +81,13 @@ def build_close_report(
     close_card_input.update({
         "report_type": "close_summary",
         "report_id": report_id,
-        "card_mode": "close-overview",
-        "card_part": 1,
-        "card_part_count": 2,
+        "card_mode": "close-summary",
         "planned_time": "15:10",
         "industry_5d": industry_5d,
-    })
-    stock_card_input = {
-        "report_type": "close_summary",
-        "report_id": report_id,
-        "card_mode": "close-stock-5d",
-        "card_part": 2,
-        "card_part_count": 2,
-        "planned_time": "15:10",
-        "trade_date": trade_date,
-        "wind_data_time": wind_data_time,
         "stock_5d": stock_5d,
-    }
+    })
     if simulation_label:
         close_card_input["simulation_label"] = simulation_label
-        stock_card_input["simulation_label"] = simulation_label
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "close_summary",
@@ -116,9 +103,9 @@ def build_close_report(
             "industry_5d": industry_5d,
             "stock_5d": stock_5d,
         },
-        "card_inputs": [close_card_input, stock_card_input],
+        "card_inputs": [close_card_input],
         "delivery": {
-            "required_parts": 2,
+            "required_parts": 1,
             "completed_parts": [],
             "status": "pending_render",
         },

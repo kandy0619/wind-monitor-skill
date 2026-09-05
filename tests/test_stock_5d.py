@@ -49,12 +49,23 @@ class StockFiveDayTest(unittest.TestCase):
         self.assertEqual(result["reduce_days_top5"][0]["reduce_days"], 4)
         self.assertEqual(result["rejected_codes"], ["000003.SZ"])
 
-    def test_second_close_card_has_three_tables(self):
+    def test_stock_consensus_is_merged_into_close_card(self):
         row = calculate._stock_candidate(self.row("000001.SZ", [1, 2, -1, 3, 4]), self.dates)
+        industry = {"industry": "一级--测试行业", "net_yuan": 1.0, "add_days": 4, "reduce_days": 1, "add_yuan": 2.0, "reduce_yuan": 1.0}
         payload = {
             "report_type": "close_summary",
             "planned_time": "15:10",
-            "card_mode": "close-stock-5d",
+            "card_mode": "close-summary",
+            "wind_data_time": "2026-08-26 15:00",
+            "top10_main_net_inflow_yi": 1.0,
+            "top10_average_change_pct": 1.0,
+            "top10": [{"name": "测试股", "main_net_inflow_yi": 1.0, "change_pct": 1.0, "trend": "持续加仓"}],
+            "industry_5d": {
+                "trade_dates": self.dates,
+                "net_add_top5": [industry], "net_reduce_top5": [industry],
+                "add_days_top5": [industry], "reduce_days_top5": [industry],
+                "add_amount_top5": [industry], "reduce_amount_top5": [industry],
+            },
             "stock_5d": {
                 "trade_dates": self.dates,
                 "net_add_top5": [row], "net_reduce_top5": [row],
@@ -65,7 +76,13 @@ class StockFiveDayTest(unittest.TestCase):
         card = render.build_card(payload, None)
         tables = [element for element in card["elements"] if element.get("tag") == "table"]
         self.assertEqual(len(tables), 3)
-        self.assertIn("近5日个股资金统计", card["header"]["title"]["content"])
+        self.assertIn("收盘资金决策摘要", card["header"]["title"]["content"])
+        self.assertIn("强共振", str(card))
+
+    def test_action_labels_are_transparent(self):
+        self.assertEqual(render.close_action({"trend": "持续加仓", "change_pct": 2.0}), "优先观察")
+        self.assertEqual(render.close_action({"trend": "持续加仓", "change_pct": 7.0}), "避免追高")
+        self.assertEqual(render.close_action({"trend": "持续减仓", "change_pct": -1.0}), "持仓风控")
 
 
 if __name__ == "__main__":

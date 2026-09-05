@@ -43,6 +43,9 @@ def intraday_payload(planned_time="15:00"):
 
 
 def close_payload(planned_time="15:10"):
+    dates = ["2026-08-07", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"]
+    industry = {"industry": "一级--测试行业", "net_yuan": 100_000_000, "add_days": 4, "reduce_days": 1, "add_yuan": 200_000_000, "reduce_yuan": 50_000_000}
+    stock = {"code": "000001.SZ", "name": "测试股", "net_yuan": 100_000_000, "add_days": 4, "reduce_days": 1, "add_yuan": 200_000_000, "reduce_yuan": 50_000_000}
     return {
         "report_type": "close_summary",
         "planned_time": planned_time,
@@ -59,6 +62,18 @@ def close_payload(planned_time="15:10"):
                 "trend": "持续加仓",
             }
         ],
+        "industry_5d": {
+            "trade_dates": dates,
+            "net_add_top5": [industry], "net_reduce_top5": [dict(industry, net_yuan=-100_000_000)],
+            "add_days_top5": [industry], "reduce_days_top5": [industry],
+            "add_amount_top5": [industry], "reduce_amount_top5": [industry],
+        },
+        "stock_5d": {
+            "trade_dates": dates,
+            "net_add_top5": [stock], "net_reduce_top5": [dict(stock, net_yuan=-100_000_000)],
+            "add_days_top5": [stock], "reduce_days_top5": [stock],
+            "add_amount_top5": [stock], "reduce_amount_top5": [stock],
+        },
     }
 
 
@@ -96,8 +111,14 @@ class ReportContractTest(unittest.TestCase):
     def test_1510_close_uses_close_layout(self):
         card = render.build_card(close_payload(), None)
         title = card["header"]["title"]["content"]
-        self.assertIn("15:10 收盘主力榜", title)
-        self.assertEqual(sum(1 for item in card["elements"] if item.get("tag") == "table"), 1)
+        self.assertIn("15:10 收盘资金决策摘要", title)
+        self.assertEqual(sum(1 for item in card["elements"] if item.get("tag") == "table"), 3)
+
+    def test_1510_rejects_legacy_split_card_mode(self):
+        payload = close_payload()
+        payload["card_mode"] = "close-stock-5d"
+        with self.assertRaisesRegex(ValueError, "unsupported 15:10 close card_mode"):
+            render.build_card(payload, None)
 
 
 if __name__ == "__main__":

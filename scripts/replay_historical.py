@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from calculate_monitor import calculate_close, calculate_intraday
+from build_close_report import build_close_report
 from deliver_report import card_hash, deliver_report_package, validate_card
 from kstock_feishu_delivery import DeliveryError
 from monitor_runtime import SlotStateStore, SlotTask, empty_manifest, plan_poll
@@ -56,12 +57,11 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
     expected_intraday_path = state_root / "a-share-monitor-calculated" / f"{token}-1500.json"
     close_input_path = state_root / "a-share-monitor-input" / f"{token}-close-trend.json"
     expected_close_trend_path = state_root / "a-share-monitor-calculated" / f"{token}-close-trend.json"
-    close_normalized_path = state_root / "a-share-monitor-normalized" / f"{token}-close.json"
     close_top10_path = state_root / "a-share-close-main-add-top10" / f"{token}.json"
     required = [
         previous_normalized_path, current_normalized_path, current_input_path,
         final_state_path, expected_intraday_path, close_input_path,
-        expected_close_trend_path, close_normalized_path, close_top10_path,
+        expected_close_trend_path, close_top10_path,
     ]
     _require(required)
 
@@ -87,37 +87,6 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
     close_trend_matches = close_trend == expected_close_trend
     atomic_write_json(output_root / "close-trend-calculated.json", close_trend)
 
-    close_normalized = read_json(close_normalized_path)
-    close_normalized.update({"report_type": "close_summary", "planned_time": "15:10"})
-    close_card = build_card(close_normalized, None)
-    validate_card(close_card)
-    atomic_write_json(output_root / "close-card-legacy.json", close_card)
-
-    # Exercise pending_send -> retry -> completed using the historical close card.
-    delivery_package = {
-        "report_id": f"historical-{token}-close",
-        "card_inputs": [close_normalized],
-        "delivery": {},
-    }
-    delivery_path = output_root / "close-delivery-package.json"
-    persist_delivery = lambda value: atomic_write_json(delivery_path, value)
-    first_attempt_failed = False
-    try:
-        deliver_report_package(
-            delivery_package,
-            persist=persist_delivery,
-            sender=lambda card: (_ for _ in ()).throw(DeliveryError("simulated_failure", "simulated")),
-        )
-    except DeliveryError:
-        first_attempt_failed = True
-    first_delivery_status = delivery_package["delivery"].get("status")
-    delivered_cards: list[dict[str, Any]] = []
-    deliver_report_package(
-        delivery_package,
-        persist=persist_delivery,
-        sender=lambda card: delivered_cards.append(copy.deepcopy(card)) or {"success": True},
-    )
-
     intraday_plan = plan_poll(datetime.fromisoformat(f"{trade_date}T15:00:00+08:00"), empty_manifest(trade_date))
     close_manifest = empty_manifest(trade_date)
     close_manifest["slots"]["15:00:intraday"] = {
@@ -132,6 +101,37 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
         if not path.is_file()
     ]
     close_top10 = read_json(close_top10_path)
+    delivery_path = output_root / "close-delivery-package.json"
+    close_card = None
+    delivery_package = None
+    first_attempt_failed = False
+    first_delivery_status = None
+    delivered_cards: list[dict[str, Any]] = []
+    if not missing_close_components:
+        delivery_package = build_close_report(
+            close_top10,
+            read_json(industry_5d_path),
+            read_json(stock_5d_path),
+            simulation_label=f"历史演练 {trade_date}",
+        )
+        close_card = build_card(delivery_package["card_inputs"][0], None)
+        validate_card(close_card)
+        atomic_write_json(output_root / "close-card.json", close_card)
+        persist_delivery = lambda value: atomic_write_json(delivery_path, value)
+        try:
+            deliver_report_package(
+                delivery_package,
+                persist=persist_delivery,
+                sender=lambda card: (_ for _ in ()).throw(DeliveryError("simulated_failure", "simulated")),
+            )
+        except DeliveryError:
+            first_attempt_failed = True
+        first_delivery_status = delivery_package["delivery"].get("status")
+        deliver_report_package(
+            delivery_package,
+            persist=persist_delivery,
+            sender=lambda card: delivered_cards.append(copy.deepcopy(card)) or {"success": True},
+        )
 
     slot_store = SlotStateStore(output_root / "run-slots" / f"{token}.json", trade_date)
     intraday_task = SlotTask("15:00", "intraday")
@@ -151,7 +151,15 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
             datetime.fromisoformat(f"{trade_date}T15:10:01+08:00"),
             "data",
             {"code": "missing_historical_components", "components": missing_close_components},
-            {"legacy_card_sha256": card_hash(close_card)},
+            {},
+        )
+    else:
+        slot_store.complete(
+            close_task,
+            datetime.fromisoformat(f"{trade_date}T15:10:01+08:00"),
+            wind_data_time=close_top10.get("wind_data_time"),
+            delivery="dry_run_success",
+            artifacts={"card_sha256": card_hash(close_card)},
         )
     summary = {
         "simulation": True,
@@ -172,12 +180,12 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
             "route_modes": [item["mode"] for item in close_plan.get("tasks", [])],
             "top10_count": len(close_top10.get("top10", [])),
             "trend_calculation_matches_saved_result": close_trend_matches,
-            "legacy_card_valid": True,
-            "legacy_card_sha256": card_hash(close_card),
+            "card_valid": close_card is not None,
+            "card_sha256": card_hash(close_card) if close_card is not None else None,
             "delivery_retry": {
                 "first_attempt_failed": first_attempt_failed,
                 "status_after_failure": first_delivery_status,
-                "final_status": delivery_package["delivery"].get("status"),
+                "final_status": delivery_package["delivery"].get("status") if delivery_package else None,
                 "retry_sent_count": len(delivered_cards),
                 "retried_card_unchanged": bool(delivered_cards) and delivered_cards[0] == close_card,
             },
@@ -188,7 +196,7 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
             "intraday_calculated": str(output_root / "intraday-calculated.json"),
             "intraday_card": str(output_root / "intraday-card.json"),
             "close_trend_calculated": str(output_root / "close-trend-calculated.json"),
-            "close_card_legacy": str(output_root / "close-card-legacy.json"),
+            "close_card": str(output_root / "close-card.json") if close_card is not None else None,
             "close_delivery_package": str(delivery_path),
             "run_slots": str(output_root / "run-slots" / f"{token}.json"),
         },

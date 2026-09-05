@@ -45,23 +45,23 @@ class CloseReportTest(unittest.TestCase):
             "add_amount_top5": [stock], "reduce_amount_top5": [stock],
         }
 
-    def test_one_close_transaction_produces_two_linked_cards(self):
+    def test_one_close_transaction_produces_one_decision_card(self):
         package = close_report.build_close_report(self.top10, self.industry, self.stock)
         self.assertEqual(package["planned_time"], "15:10")
         self.assertEqual(package["report_type"], "close_summary")
         self.assertEqual(
             [item["card_mode"] for item in package["card_inputs"]],
-            ["close-overview", "close-stock-5d"],
+            ["close-summary"],
         )
-        self.assertEqual(package["delivery"]["required_parts"], 2)
+        self.assertEqual(package["delivery"]["required_parts"], 1)
         cards = [render.build_card(item, None) for item in package["card_inputs"]]
-        self.assertIn("（1/2）", cards[0]["header"]["title"]["content"])
-        self.assertIn("（2/2）", cards[1]["header"]["title"]["content"])
+        self.assertEqual(len(cards), 1)
+        self.assertNotIn("（", cards[0]["header"]["title"]["content"])
         for card in cards:
             serialized = str(card)
             self.assertIn(package["report_id"], serialized)
             tables = [element for element in card["elements"] if element.get("tag") == "table"]
-            self.assertLessEqual(len(tables), 5)
+            self.assertEqual(len(tables), 3)
 
     def test_report_id_is_deterministic_for_delivery_retry(self):
         first = close_report.build_close_report(self.top10, self.industry, self.stock)
