@@ -39,7 +39,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 3. `wind_response_adapter.py`：保存脱敏原始回包并输出稳定Schema；失败进入自愈SOP。
 4. `calculate_monitor.py`：执行盘中、趋势、行业5日和个股5日计算。
 5. `build_close_report.py`：把15:10所有组件合并为一个稳定报告ID。
-6. `render_feishu_card.py`：只从规范化JSON生成卡片。
+6. `render_feishu_card.py`：只从带显式报告契约的规范化JSON生成卡片；15:00固定为盘中四表，15:10固定为收盘两分片，契约冲突直接失败。
 7. `deliver_report.py`：验证卡片并调用 `kstock_feishu_delivery.py`，逐片持久化交付结果。
 8. `stage_rendered_cards.py`：把已由官方渲染器生成并验证的卡片原样绑定到交付包，确保发送内容不被二次改写。
 
@@ -51,7 +51,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 - 使用脱敏fixture验证旧Wind信封、新字段名、列式数组、未知单位、空结果和100行截断。
 - 在测试数据库中验证优先任务、单一群聊、歧义失败和日志脱敏。
 - 沙箱验证导入、文件访问、进程和网络代码均被拒绝。
-- 集成环境试发卡时确认15:00一张盘中卡，15:10两张同报告ID收盘卡；模拟第二张失败后只重试第二张。
+- 集成环境试发卡时确认15:00一张盘中四表卡且标题不含“收盘”，15:10两张同报告ID收盘卡；模拟向15:00载荷注入`top10`、向15:10载荷注入`intraday`类型时必须拒绝发送；模拟第二张失败后只重试第二张。
 - 不在无授权环境发真实飞书消息或消耗Wind额度。
 
 ## 历史分片离线重放

@@ -48,6 +48,11 @@ class CloseReportTest(unittest.TestCase):
     def test_one_close_transaction_produces_two_linked_cards(self):
         package = close_report.build_close_report(self.top10, self.industry, self.stock)
         self.assertEqual(package["planned_time"], "15:10")
+        self.assertEqual(package["report_type"], "close_summary")
+        self.assertEqual(
+            [item["card_mode"] for item in package["card_inputs"]],
+            ["close-overview", "close-stock-5d"],
+        )
         self.assertEqual(package["delivery"]["required_parts"], 2)
         cards = [render.build_card(item, None) for item in package["card_inputs"]]
         self.assertIn("（1/2）", cards[0]["header"]["title"]["content"])

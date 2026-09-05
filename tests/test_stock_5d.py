@@ -52,6 +52,8 @@ class StockFiveDayTest(unittest.TestCase):
     def test_second_close_card_has_three_tables(self):
         row = calculate._stock_candidate(self.row("000001.SZ", [1, 2, -1, 3, 4]), self.dates)
         payload = {
+            "report_type": "close_summary",
+            "planned_time": "15:10",
             "card_mode": "close-stock-5d",
             "stock_5d": {
                 "trade_dates": self.dates,

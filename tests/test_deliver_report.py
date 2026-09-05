@@ -13,6 +13,8 @@ from kstock_feishu_delivery import DeliveryError
 
 def minimal_input(title):
     return {
+        "report_type": "close_summary",
+        "planned_time": "15:10",
         "trade_date": "2026-08-13",
         "slot": "15:10",
         "wind_data_time": "15:00:00",

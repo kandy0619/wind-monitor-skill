@@ -50,6 +50,7 @@ class IndustryFiveDayTest(unittest.TestCase):
             "observed_days": 5,
         }
         payload = {
+            "report_type": "close_summary",
             "planned_time": "15:10",
             "wind_data_time": "2026-08-26 15:00",
             "top10_main_net_inflow_yi": 1.0,
@@ -75,6 +76,7 @@ class IndustryFiveDayTest(unittest.TestCase):
             "reduce_yuan": 50_000_000,
         }
         payload = {
+            "report_type": "close_summary",
             "planned_time": "15:10",
             "wind_data_time": "2026-08-26 15:00",
             "top10_main_net_inflow_yi": 1.0,

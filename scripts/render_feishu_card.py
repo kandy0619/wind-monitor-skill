@@ -25,6 +25,70 @@ STATUS_COLORS = {
     "Wind未返回": "orange",
 }
 
+INTRADAY_REPORT_TYPE = "intraday"
+CLOSE_REPORT_TYPE = "close_summary"
+CLOSE_PLANNED_TIME = "15:10"
+INTRADAY_PLANNED_TIMES = {
+    "09:30", "09:40", "09:50",
+    "10:00", "10:10", "10:20", "10:30", "10:40", "10:50",
+    "11:00", "11:10", "11:20", "11:30",
+    "13:00", "13:10", "13:20", "13:30", "13:40", "13:50",
+    "14:00", "14:10", "14:20", "14:30", "14:40", "14:50",
+    "15:00",
+}
+CLOSE_ONLY_FIELDS = {"top10", "top10_main_net_inflow_yi", "top10_average_change_pct", "stock_5d"}
+
+
+def report_contract(current: dict[str, Any]) -> tuple[str, str | None]:
+    """Validate the explicit slot/report contract before choosing a card layout.
+
+    Planned time is authoritative. Payload shape is only validated after the
+    report type is known; it is never used to guess whether a report is close or
+    intraday.
+    """
+    planned_time = str(current.get("planned_time") or "")
+    report_type = str(current.get("report_type") or "")
+    card_mode = current.get("card_mode")
+
+    if planned_time in INTRADAY_PLANNED_TIMES:
+        if report_type != INTRADAY_REPORT_TYPE:
+            raise ValueError(
+                f"report contract mismatch: {planned_time} requires report_type=intraday"
+            )
+        forbidden = sorted(field for field in CLOSE_ONLY_FIELDS if field in current)
+        if card_mode is not None or forbidden:
+            details = f"card_mode={card_mode!r}, close_fields={forbidden}"
+            raise ValueError(
+                f"report contract mismatch: {planned_time} must use the intraday four-table layout ({details})"
+            )
+        return INTRADAY_REPORT_TYPE, None
+
+    if planned_time == CLOSE_PLANNED_TIME:
+        if report_type != CLOSE_REPORT_TYPE:
+            raise ValueError(
+                "report contract mismatch: 15:10 requires report_type=close_summary"
+            )
+        if card_mode in (None, "close-overview"):
+            if "top10" not in current:
+                raise ValueError("15:10 close overview payload is missing top10")
+            return CLOSE_REPORT_TYPE, "close-overview"
+        if card_mode == "close-stock-5d":
+            if "stock_5d" not in current:
+                raise ValueError("15:10 close stock payload is missing stock_5d")
+            return CLOSE_REPORT_TYPE, card_mode
+        raise ValueError(f"unsupported 15:10 close card_mode: {card_mode!r}")
+
+    raise ValueError(f"unsupported report planned_time: {planned_time!r}")
+
+
+def validate_previous_contract(previous: dict[str, Any] | None) -> None:
+    if previous is None:
+        return
+    report_type = previous.get("report_type")
+    planned_time = str(previous.get("planned_time") or "")
+    if report_type != INTRADAY_REPORT_TYPE or planned_time not in INTRADAY_PLANNED_TIMES:
+        raise ValueError("previous payload must be a successful intraday report slice")
+
 
 def signed(value: float, suffix: str) -> str:
     if value > 0:
@@ -127,6 +191,10 @@ def stock_text(name: str, amount: float | None, change_pct: float | None) -> str
 
 
 def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
+    report_type, _ = report_contract(current)
+    if report_type != INTRADAY_REPORT_TYPE:
+        raise ValueError("intraday renderer received a non-intraday payload")
+    validate_previous_contract(previous)
     previous = previous or {}
     prev_indexes = previous_map(previous.get("indexes", []), 2, 3)
     prev_stocks = previous_map(previous.get("stocks", []), 1, 3)
@@ -291,6 +359,9 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
 
 
 def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
+    report_type, card_mode = report_contract(current)
+    if report_type != CLOSE_REPORT_TYPE or card_mode != "close-overview":
+        raise ValueError("close overview renderer received an incompatible payload")
     top10 = list(current.get("top10", []))
     if not top10:
         raise ValueError("close payload has no top10 rows")
@@ -298,7 +369,7 @@ def build_close_card(current: dict[str, Any]) -> dict[str, Any]:
     total = float(current["top10_main_net_inflow_yi"])
     average_pct = float(current["top10_average_change_pct"])
     leading_trend = str(top10[0].get("trend") or "样本不足")
-    slot = str(current.get("planned_time") or "15:10")
+    slot = str(current["planned_time"])
     header_color = "red" if total > 0 else "green" if total < 0 else "blue"
 
     rows = []
@@ -412,6 +483,9 @@ def stock_label(item: dict[str, Any] | None) -> str:
 
 
 def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
+    report_type, card_mode = report_contract(current)
+    if report_type != CLOSE_REPORT_TYPE or card_mode != "close-stock-5d":
+        raise ValueError("close stock renderer received an incompatible payload")
     stock_5d = current.get("stock_5d") or current
     trade_dates = stock_5d.get("trade_dates", [])
     if len(trade_dates) != 5:
@@ -481,7 +555,7 @@ def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "blue",
-            "title": {"tag": "plain_text", "content": "📊 15:10 收盘｜近5日个股资金统计"},
+            "title": {"tag": "plain_text", "content": f"📊 {current['planned_time']} 收盘｜近5日个股资金统计"},
         },
         "elements": elements,
     }
@@ -497,6 +571,8 @@ def annotate_report_part(card: dict[str, Any], current: dict[str, Any]) -> dict[
             "tag": "note",
             "elements": [{"tag": "plain_text", "content": "历史数据流程演练，不代表当前市场状态。"}],
         })
+    if current.get("report_type") != CLOSE_REPORT_TYPE:
+        return card
     report_id = current.get("report_id")
     part = current.get("card_part")
     part_count = current.get("card_part_count")
@@ -513,12 +589,19 @@ def annotate_report_part(card: dict[str, Any], current: dict[str, Any]) -> dict[
 
 
 def build_card(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
-    if current.get("card_mode") == "close-stock-5d" or ("stock_5d" in current and "top10" not in current):
-        card = build_close_stock_5d_card(current)
-    elif "top10" in current:
-        card = build_close_card(current)
-    else:
+    report_type, card_mode = report_contract(current)
+    if report_type == INTRADAY_REPORT_TYPE:
         card = build_intraday_card(current, previous)
+    elif card_mode == "close-overview":
+        if previous is not None:
+            raise ValueError("15:10 close report must not receive --previous")
+        card = build_close_card(current)
+    elif card_mode == "close-stock-5d":
+        if previous is not None:
+            raise ValueError("15:10 close report must not receive --previous")
+        card = build_close_stock_5d_card(current)
+    else:
+        raise ValueError("report contract did not select a supported card layout")
     return annotate_report_part(card, current)
 
 

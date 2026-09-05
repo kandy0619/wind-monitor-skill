@@ -34,12 +34,29 @@ class SlotTask:
     planned_time: str
     mode: str
 
+    def __post_init__(self) -> None:
+        if self.mode == "intraday" and self.planned_time not in INTRADAY_TIMES:
+            raise ValueError(f"invalid intraday slot: {self.planned_time}")
+        if self.mode == "close" and self.planned_time != "15:10":
+            raise ValueError(f"close mode is reserved for 15:10, got {self.planned_time}")
+        if self.planned_time == "15:10" and self.mode != "close":
+            raise ValueError(f"15:10 is reserved for close mode, got {self.mode}")
+        if self.mode == "trend_sample" and self.planned_time not in SAMPLE_TIMES:
+            raise ValueError(f"invalid trend sample slot: {self.planned_time}")
+        if self.mode not in {"intraday", "close", "trend_sample"}:
+            raise ValueError(f"unsupported slot mode: {self.mode}")
+
     @property
     def key(self) -> str:
         return f"{self.planned_time}:{self.mode}"
 
     def as_dict(self) -> dict[str, Any]:
-        return {"key": self.key, "planned_time": self.planned_time, "mode": self.mode}
+        value = {"key": self.key, "planned_time": self.planned_time, "mode": self.mode}
+        if self.mode == "intraday":
+            value["report_type"] = "intraday"
+        elif self.mode == "close":
+            value["report_type"] = "close_summary"
+        return value
 
 
 def atomic_write_json(path: Path, value: Any) -> None:

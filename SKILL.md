@@ -51,7 +51,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 ## 盘中工作流
 
-15:00是最后一个标准盘中报告档，必须继续执行完整盘中取数、计算、Codex双层展示和飞书交付。15:10是独立的收盘总结档，不能以15:00已完成为由跳过，也不能把15:10内容替换成盘中报告。
+15:00是最后一个标准10分钟盘中报告档，语义和09:30—14:50各档完全一致：规范化卡片输入必须写 `report_type=intraday`、`planned_time=15:00`，并使用上一成功盘中档（通常14:50）计算近10分钟变化。它必须输出一张包含代表指数、自选股、行业流入Top 5、行业流出Top 5的盘中四表卡，标题不得出现“收盘”“收盘榜”或“全日趋势”。15:10才是独立的收盘总结档，不能以15:00已完成为由跳过，也不能把任一档内容或布局替换成另一档。
 
 1. 批量查询3只自选股和4个代表指数。自选股名称与Wind代码以 [references/monitor-spec.md](references/monitor-spec.md) 和 [references/wind-query-map.md](references/wind-query-map.md) 的当前清单为准，不得沿用历史运行文件中的旧清单。行业数据必须按 [references/wind-query-map.md](references/wind-query-map.md) 的“两阶段行业双榜”执行：先单独取得Wind行业汇总净流入Top 5和净流出Top 5，再以这10个Wind行业完整名称单独查询各行业主力净流入Top 3个股。禁止在同一次 `analytics_data.get_financial_data` 调用中混合索取行业汇总行和个股明细行。
    行业分析接口返回的是调用时可得的当日累计值，但通常不提供可核验的盘中时间戳。每个盘中档的A1、A2、B问题必须包含本次计划档位和唯一调用时刻，禁止复用同日早先请求文件或响应。若行业双榜与上一档完全相同且无行业时间戳，使用带唯一调用时刻的改写请求重新查询一次；仍相同则保留真实结果，并在状态中标记 `industry_update_status=unverified_unchanged`，不得声称发生了10分钟行业变化。
@@ -89,7 +89,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 - 先完成完整Wind取数、计算和状态落盘，再由同一结果派生两个展示版本；不得为了精简展示减少查询、截断状态或丢弃原始字段。
 - 飞书使用 KStock 的 `backend/services/feishu_bot.py` `send_card`，只推送参考规格定义的可视化精简卡片。严格使用参考规格规定的标题主题色、图标、涨跌箭头、彩色数值、状态标签、紧凑表格和末级行业名；不得退化为大段纯文字，不得把完整审计表附在飞书卡片后，也不得发送第二条完整报告。
-- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。盘中档追加 `--previous <previous-normalized.json>`；当天首档和收盘档省略 `--previous`。生成器依据输入结构自动选择盘中卡片、收盘榜与行业统计卡片，或 `card_mode=close-stock-5d` 的近5日个股统计卡片。收盘个股统计因单卡表格上限自然拆为第二张精简卡片，两张均属于同一15:10报告；不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
+- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。报告类型只由显式的 `planned_time + report_type + card_mode` 契约决定，禁止根据是否出现 `top10`、`stock_5d` 等字段猜测类型。盘中档写 `report_type=intraday` 并追加 `--previous <previous-normalized.json>`；当天首档可省略 `--previous`。15:10写 `report_type=close_summary`，省略 `--previous`，第一片使用 `card_mode=close-overview`（或省略该字段），第二片使用 `card_mode=close-stock-5d`。契约冲突必须记为 `pending_render` / `report_contract_mismatch` 并停止发送，不能自动改标题、换模板或降级。收盘个股统计因单卡表格上限自然拆为第二张精简卡片，两张均属于同一15:10报告；不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
 - Codex 对报告档先展示与飞书信息等价的精简版，再以 `完整报告（审计）` 为标题展示参考规格要求的全部表格和必要限制。精简版不能替代完整审计版。
 - 纯取样档、已完成的重复档和非交易日继续静默，不输出精简版或完整版。报告档不得仅因触发延迟、执行耗时、进入下一档或发送失败而静默；必须保留 `pending` 并继续完成飞书交付。
 - 报告档只有在Wind取数、计算、规定状态落盘和飞书精简卡片发送全部成功后才标记完成。飞书失败时保留已落盘数据和待发送卡片，记录为 `pending_send`；后续触发优先直接重试发送，避免无必要地重复Wind取数。没有可复用结果时才从失败阶段继续执行。
@@ -121,3 +121,5 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 更新后不要只检查配置已保存。至少等待下一个固定业务档位并核对目标线程出现新的 `task_started` / `task_complete`，同时检查对应档位状态、Wind数据落盘和飞书发送结果。若自动化更新接口返回“处理器未注册”，先恢复或重启 Codex app-server，再更新原任务，禁止创建替代任务。
 
 自动化提示词应要求调用 `$wind-monitor-skill` 并以本技能和参考规格为唯一业务口径，同时明确“触发后不受执行宽限限制，未完成档进入 `pending` 并持续重试至飞书发送成功”；自动化只需保留运行时间、必要静默规则、技能调用入口和“按技能定义执行双渠道交付”，避免复制两份会漂移的长规格或要求两个渠道发送相同内容。
+
+KStock原生融合的目标架构、数据表、迁移阶段和研究接口保存在 [references/kstock-integration-plan.md](references/kstock-integration-plan.md)。实施KStock融合前先读取该方案；业务规则和可移植实现仍以本Skill仓库为单一来源。

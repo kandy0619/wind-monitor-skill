@@ -68,6 +68,8 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
     output_root.mkdir(parents=True, exist_ok=True)
     previous_normalized = read_json(previous_normalized_path)
     current_normalized = read_json(current_normalized_path)
+    previous_normalized.update({"report_type": "intraday", "planned_time": "14:50"})
+    current_normalized.update({"report_type": "intraday", "planned_time": "15:00"})
     current_input = read_json(current_input_path)
     seeded_state = reconstruct_pre_slot_state(read_json(final_state_path), previous_normalized)
     intraday_result, advanced_state = calculate_intraday(current_input, seeded_state)
@@ -86,6 +88,7 @@ def replay(kstock_root: Path, trade_date: str, output_root: Path) -> dict[str, A
     atomic_write_json(output_root / "close-trend-calculated.json", close_trend)
 
     close_normalized = read_json(close_normalized_path)
+    close_normalized.update({"report_type": "close_summary", "planned_time": "15:10"})
     close_card = build_card(close_normalized, None)
     validate_card(close_card)
     atomic_write_json(output_root / "close-card-legacy.json", close_card)

@@ -81,6 +81,7 @@ def build_close_report(
     close_card_input.update({
         "report_type": "close_summary",
         "report_id": report_id,
+        "card_mode": "close-overview",
         "card_part": 1,
         "card_part_count": 2,
         "planned_time": "15:10",

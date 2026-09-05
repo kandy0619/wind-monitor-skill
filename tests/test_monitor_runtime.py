@@ -28,7 +28,15 @@ class MonitorRuntimeTest(unittest.TestCase):
     def test_intraday_frequency_and_close_are_separate(self):
         self.assertEqual([task.mode for task in runtime.tasks_for_trigger("15:00")], ["intraday"])
         self.assertEqual([task.mode for task in runtime.tasks_for_trigger("15:10")], ["close"])
+        self.assertEqual(runtime.tasks_for_trigger("15:00")[0].as_dict()["report_type"], "intraday")
+        self.assertEqual(runtime.tasks_for_trigger("15:10")[0].as_dict()["report_type"], "close_summary")
         self.assertEqual(len(runtime.TRIGGER_TIMES), 30)
+
+    def test_crossed_close_and_intraday_slots_are_rejected(self):
+        with self.assertRaises(ValueError):
+            runtime.SlotTask("15:00", "close")
+        with self.assertRaises(ValueError):
+            runtime.SlotTask("15:10", "intraday")
 
     def test_overlapping_intraday_and_sample_slot_runs_both(self):
         self.assertEqual(
@@ -42,7 +50,10 @@ class MonitorRuntimeTest(unittest.TestCase):
             "planned_time": "15:00", "mode": "intraday", "status": "completed"
         }
         plan = runtime.plan_poll(self.at(15, 10), manifest)
-        self.assertEqual(plan["tasks"], [{"key": "15:10:close", "planned_time": "15:10", "mode": "close"}])
+        self.assertEqual(plan["tasks"], [{
+            "key": "15:10:close", "planned_time": "15:10", "mode": "close",
+            "report_type": "close_summary",
+        }])
 
     def test_pending_is_retried_before_current_slot(self):
         manifest = runtime.empty_manifest("2026-08-13")
