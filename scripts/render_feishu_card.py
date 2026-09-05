@@ -469,12 +469,31 @@ def build_close_stock_5d_card(current: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def annotate_report_part(card: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Bind multiple Feishu cards to one logical close-report transaction."""
+    report_id = current.get("report_id")
+    part = current.get("card_part")
+    part_count = current.get("card_part_count")
+    if not report_id:
+        return card
+    if part and part_count:
+        title = card["header"]["title"]["content"]
+        card["header"]["title"]["content"] = f"{title}（{part}/{part_count}）"
+    card["elements"].append({
+        "tag": "note",
+        "elements": [{"tag": "plain_text", "content": f"收盘总结编号：{report_id}"}],
+    })
+    return card
+
+
 def build_card(current: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
     if current.get("card_mode") == "close-stock-5d" or ("stock_5d" in current and "top10" not in current):
-        return build_close_stock_5d_card(current)
-    if "top10" in current:
-        return build_close_card(current)
-    return build_intraday_card(current, previous)
+        card = build_close_stock_5d_card(current)
+    elif "top10" in current:
+        card = build_close_card(current)
+    else:
+        card = build_intraday_card(current, previous)
+    return annotate_report_part(card, current)
 
 
 def main() -> None:
@@ -482,8 +501,15 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--previous", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--part", type=int, choices=(1, 2))
     args = parser.parse_args()
     current = json.loads(args.input.read_text(encoding="utf-8"))
+    if current.get("report_type") == "close_summary" and "card_inputs" in current:
+        if args.part is None:
+            raise ValueError("a close_summary package requires --part 1 or --part 2")
+        current = current["card_inputs"][args.part - 1]
+    elif args.part is not None:
+        raise ValueError("--part is only valid for a close_summary package")
     previous = json.loads(args.previous.read_text(encoding="utf-8")) if args.previous else None
     card = build_card(current, previous)
     args.output.parent.mkdir(parents=True, exist_ok=True)

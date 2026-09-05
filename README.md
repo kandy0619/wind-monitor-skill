@@ -7,6 +7,7 @@
 ## 主要能力
 
 - 每 10 分钟监控三只自选股和四个代表指数的主力资金变化。
+- 15:00 保持为最后一个标准盘中报告；15:10 独立生成统一完整的收盘总结。
 - 以独立Wind查询分别取得行业净流入/净流出 Top 5及榜内行业Top 3个股，避免混合粒度导致双榜缺失。
 - 在固定时点保存沪市主板、深市主板、创业板和科创板候选样本。
 - 15:10 生成“四板块各 Top 5 候选合并榜”收盘 Top 10。
@@ -16,6 +17,7 @@
 - 在 Codex 中同时输出精简版和完整审计版。
 - 使用 `pending` / `pending_send` 状态持续重试失败档位，任务触发后不因执行延迟而放弃交付。
 - 严格区分计划档位、实际执行时间和 Wind 数据时间。
+- 对Wind回包做稳定Schema规范化，并在格式漂移时执行“确定性映射→大模型映射→受限代码适配”的自愈流程。
 
 ## 运行依赖
 
@@ -46,16 +48,16 @@ npx skills add https://github.com/kandy0619/wind-monitor-skill.git --skill wind-
 首次运行时，Skill 会检查 `wind-mcp-skill`。如果依赖不存在，会自动执行：
 
 ```bash
-npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -g -y
+npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 ```
 
 主源因网络问题失败时，会尝试国内镜像：
 
 ```bash
-npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -g -y
+npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skill -y
 ```
 
-自动安装只负责部署依赖 Skill，不会写入或上传 Wind Key。使用者仍需按照 `wind-mcp-skill` 的认证指引在本机安全配置自己的 Key。
+自动安装只负责把依赖Skill部署到当前KStock项目，不会写入或上传Wind Key。正式监控不会回退到全局Wind技能；使用者仍需按照项目本地 `wind-mcp-skill` 的认证指引安全配置项目凭据。
 
 ## 使用方式
 
@@ -70,6 +72,8 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 ```
 
 自动化任务应调用 `$wind-monitor-skill`，并以 [SKILL.md](SKILL.md) 和 [监控规格](references/monitor-spec.md) 作为业务口径。报告档只有在 Wind 取数、计算、状态落盘和飞书卡片发送全部成功后才算完成。
+
+推荐把自动化提示词保持为单句调用入口，不复制档位、字段或交付规则。所有业务规则均随本仓库版本发布，因此安装同一版本后可在不同机器获得一致行为。
 
 ## 默认监控范围
 
@@ -89,6 +93,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 - 固定档位覆盖09:30—11:30和13:00—15:10的报告、采样与收盘任务，具体列表以监控规格为准。
 - 固定趋势样本为 10:00、10:30、11:00、11:15、13:30、13:45、14:00、14:30、14:45。
 - 收盘报告计划档为 15:10，读取 15:00 附近的收盘数据。
+- 15:00仍按盘中规范独立发送，完成状态不会抑制15:10收盘总结。
 - 不设置“超过若干秒即放弃”的执行宽限。
 - 已触发但未完成的档位进入 `pending`；飞书待发送状态使用 `pending_send`，后续触发优先重试。
 - 延迟取得的数据必须展示真实 Wind 时间，不能冒充计划时点快照。
@@ -98,6 +103,8 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 ### 飞书
 
 仅发送精简互动卡片，突出关键资金状态、代表指数、自选股和行业异动。接收群从 KStock 已启用的 `MonitorTask` 动态读取，不在 Skill 或仓库中硬编码群 ID。
+
+15:10虽受飞书单卡表格限制拆成两张卡，但共享同一个稳定报告ID并作为一次交付事务处理；失败重试仅发送尚未成功的分片。
 
 ### Codex
 
@@ -112,13 +119,22 @@ wind-monitor-skill/
 │   └── openai.yaml
 ├── references/
 │   ├── monitor-spec.md
-│   └── wind-query-map.md
+│   ├── wind-query-map.md
+│   ├── canonical-schema.md
+│   ├── self-healing-sop.md
+│   └── deployment.md
 ├── scripts/
 │   ├── calculate_monitor.py
-│   └── render_feishu_card.py
+│   ├── render_feishu_card.py
+│   ├── wind_cli_client.py
+│   ├── wind_response_adapter.py
+│   ├── validate_generated_adapter.py
+│   ├── monitor_runtime.py
+│   ├── build_close_report.py
+│   ├── deliver_report.py
+│   └── kstock_feishu_delivery.py
 └── tests/
-    ├── test_industry_5d.py
-    └── test_stock_5d.py
+    └── test_*.py
 ```
 
 ## 安全说明
@@ -133,7 +149,10 @@ wind-monitor-skill/
 验证 Python 脚本语法：
 
 ```bash
-python -m py_compile scripts/calculate_monitor.py scripts/render_feishu_card.py
+python -m compileall -q scripts
+python -m unittest discover -s tests -v
 ```
 
 验证 Skill 元数据时，可使用 Codex `skill-creator` 提供的 `quick_validate.py`。
+
+完整部署、薄自动化提示词和跨机器验收步骤参见 [references/deployment.md](references/deployment.md)。
