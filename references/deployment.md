@@ -52,3 +52,13 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 - 沙箱验证导入、文件访问、进程和网络代码均被拒绝。
 - 集成环境试发卡时确认15:00一张盘中卡，15:10两张同报告ID收盘卡；模拟第二张失败后只重试第二张。
 - 不在无授权环境发真实飞书消息或消耗Wind额度。
+
+## 历史分片离线重放
+
+使用独立输出目录重放，不读取当前时钟、不写生产状态、不调用Wind或飞书：
+
+```bash
+python scripts/replay_historical.py --kstock-root <KStock目录> --trade-date 2026-08-13 --output-root <隔离输出目录>
+```
+
+旧历史分片若缺少新版收盘必需的行业5日或个股5日数据，重放结果必须是 `pending_missing_historical_components`；这表示旧数据不足，不能用插值、空值补0或测试fixture把它伪装成完整收盘报告。
