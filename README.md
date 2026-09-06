@@ -1,6 +1,6 @@
 # wind-monitor-skill
 
-基于万得 Wind 金融数据的 A 股资金流向监控 Skill。它为 Codex 定义盘中 10 分钟报告、固定时点趋势采样、收盘主力榜、飞书互动卡片以及可审计状态文件的完整工作流。
+基于万得 Wind 金融数据的 A 股资金流向监控 Skill。它为 Codex 定义盘中 10 分钟报告、固定时点趋势采样、统一收盘总结、飞书互动卡片以及KStock MySQL可审计状态的完整工作流。
 
 > 本仓库是工作流 Skill，不包含 Wind API Key、飞书凭据或 KStock 运行配置。金融数据由独立的 `wind-mcp-skill` 提供。
 
@@ -13,10 +13,10 @@
 - 15:10 生成“四板块各 Top 5 候选合并榜”收盘 Top 10。
 - 收盘报告统计最近5个交易日的行业净额、加减仓天数及累计加减仓金额Top 5。
 - 收盘报告增加全A个股对应的近5日六方向Top 5，并用逐日原值本地复算、剔除缺值股票。
-- 15:10飞书将完整计算压缩为一张决策摘要卡：保留收盘Top 10，并突出行业与个股三维共振Top 3及透明的次日参考动作；全量六方向榜单继续进入Codex审计版和状态文件。
+- 15:10飞书将完整计算压缩为一张决策摘要卡：保留收盘Top 10，并突出行业与个股三维共振Top 3及透明的次日参考动作；全量六方向榜单继续进入Codex审计版和KStock数据库。
 - 为飞书生成适合移动端阅读的精简互动卡片。
 - 在 Codex 中同时输出精简版和完整审计版。
-- 使用 `pending` / `pending_send` 状态持续重试失败档位，任务触发后不因执行延迟而放弃交付。
+- 通过KStock内部HTTP契约把请求、事实、排名、报告和不可变卡片分阶段写入MySQL，使用 `pending` / `pending_send` 持续恢复。
 - 严格区分计划档位、实际执行时间和 Wind 数据时间。
 - 对Wind回包做稳定Schema规范化，并在格式漂移时执行“确定性映射→大模型映射→受限代码适配”的自愈流程。
 
@@ -26,7 +26,7 @@
 - Node.js 20 或更高版本
 - Python 3.11 或更高版本
 - 已安装并配置可用的 `wind-mcp-skill`
-- KStock 项目；飞书交付依赖：
+- 持续运行的KStock FastAPI与MySQL；飞书交付依赖：
   - `backend/services/feishu_bot.py`
   - 已启用且配置了 `feishu_chat_id` 的 `MonitorTask`
 
@@ -72,7 +72,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 按照 wind-monitor-skill 配置 A 股资金监控定时任务，并将报告发送到飞书。
 ```
 
-自动化任务应调用 `$wind-monitor-skill`，并以 [SKILL.md](SKILL.md) 和 [监控规格](references/monitor-spec.md) 作为业务口径。报告档只有在 Wind 取数、计算、状态落盘和飞书卡片发送全部成功后才算完成。
+自动化任务应调用 `$wind-monitor-skill`，并以 [SKILL.md](SKILL.md) 和 [监控规格](references/monitor-spec.md) 作为业务口径。报告档只有在 Wind 取数、计算、事实/报告/卡片落库和飞书卡片发送全部成功后才算完成。
 
 推荐把自动化提示词保持为单句调用入口，不复制档位、字段或交付规则。所有业务规则均随本仓库版本发布，因此安装同一版本后可在不同机器获得一致行为。
 
@@ -96,7 +96,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 - 收盘报告计划档为 15:10，读取 15:00 附近的收盘数据。
 - 15:00仍按盘中规范独立发送，完成状态不会抑制15:10收盘总结。
 - 不设置“超过若干秒即放弃”的执行宽限。
-- 已触发但未完成的档位进入 `pending`；飞书待发送状态使用 `pending_send`，后续触发优先重试。
+- 已触发但未完成的档位进入MySQL可恢复状态；飞书待发送状态使用 `pending_send`，KStock outbox只重发同一卡片。
 - 延迟取得的数据必须展示真实 Wind 时间，不能冒充计划时点快照。
 
 ## 输出渠道
@@ -105,7 +105,11 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 仅发送精简互动卡片，突出关键资金状态、代表指数、自选股和行业异动。接收群从 KStock 已启用的 `MonitorTask` 动态读取，不在 Skill 或仓库中硬编码群 ID。
 
-15:10固定生成一张带稳定报告ID的收盘决策摘要卡；发送失败时复用已持久化卡片重试，不重复取Wind或重新计算。
+15:10固定生成一张带稳定报告ID的收盘决策摘要卡；卡片JSON不可变存入KStock，发送失败时复用同一卡片重试，不重复取Wind或重新计算。
+
+生产盘中计算使用 `scripts/calculate_monitor.py intraday-kstock` 从KStock读取当天已完成事实，在内存中恢复首档基准和上一成功档；不再持久化本地JSON状态。旧 `intraday --state` 入口只用于离线回放与历史迁移。
+
+`scripts/kstock_workflow.py` 提供 `claim / attempt / facts / incident / failure / report / resume / dispatch / complete` 全流程入口，输入统一从stdin读取。报告先于渲染落库；`resume` 可直接使用已持久化规范化报告重渲染或重发，且不会再次请求Wind。
 
 ### Codex
 
@@ -116,6 +120,11 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 ```text
 wind-monitor-skill/
 ├── SKILL.md
+├── pyproject.toml
+├── contracts/
+│   └── kstock-storage-v1.json
+├── wind_monitor_contracts/
+│   └── v1.py
 ├── agents/
 │   └── openai.yaml
 ├── references/
@@ -134,6 +143,9 @@ wind-monitor-skill/
 │   ├── build_close_report.py
 │   ├── deliver_report.py
 │   ├── kstock_feishu_delivery.py
+│   ├── kstock_api_client.py
+│   ├── kstock_workflow.py
+│   ├── import_legacy_state.py
 │   ├── collect_historical_industry.py
 │   ├── collect_historical_stock.py
 │   ├── stage_rendered_cards.py
@@ -146,8 +158,8 @@ wind-monitor-skill/
 
 - 不要向仓库提交 Wind API Key、飞书 App Secret、访问令牌或群 ID。
 - 密钥应保存在本地配置、环境变量或安全凭据系统中。
-- 状态文件和实际报告可能包含业务数据，应保留在运行项目中，不要提交到本 Skill 仓库。
-- 该 Skill 只生成资金监控报告，不提供买卖建议。
+- 正式运行数据保存在KStock MySQL；历史回放文件和实际报告仍可能包含业务数据，不要提交到本 Skill 仓库。
+- 该 Skill 提供带确定性触发口径的“优先观察、等待确认、避免追高、持仓风控”等决策参考，但不下达无条件买卖指令。
 
 ## 本地验证
 
@@ -155,7 +167,7 @@ wind-monitor-skill/
 
 ```bash
 python -m compileall -q scripts
-python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
 验证 Skill 元数据时，可使用 Codex `skill-creator` 提供的 `quick_validate.py`。

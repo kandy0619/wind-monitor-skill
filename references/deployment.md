@@ -5,8 +5,8 @@
 本仓库包含全部业务规格、取数桥接、格式适配、自愈SOP、计算、状态机、制卡和交付包装。目标机器只需提供：
 
 - Python 3.11+与Node.js 20+；
-- 可用的项目本地或用户级 `wind-mcp-skill`及本机Wind凭据；
-- KStock项目、数据库中的启用`MonitorTask.feishu_chat_id`以及本机飞书应用凭据。
+- 可用的项目本地 `.agents/skills/wind-mcp-skill`及项目凭据；
+- 持续运行的KStock FastAPI与MySQL、数据库中的启用`MonitorTask.feishu_chat_id`以及本机飞书应用凭据。
 
 Skill不包含、不复制也不输出任何凭据或接收标识。
 
@@ -32,16 +32,31 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 
 不要在任务提示词复制股票清单、时间表、字段、卡片结构、收盘逻辑或接收目标。规则升级只通过Skill版本完成。
 
+## KStock服务配置
+
+KStock启动时执行版本化迁移，建立Wind运行、请求、事实、排名、报告、投递和研究表。生产环境设置：
+
+```text
+KSTOCK_AGENT_TOKEN=<随机长令牌>
+KSTOCK_WIND_MONITOR_URL=http://127.0.0.1:8002/api/v1/internal/wind-monitor
+WIND_MONITOR_STORAGE_BACKEND=kstock
+```
+
+令牌只能进入环境变量或本机密钥管理，不得进入自动化提示、命令参数、日志或仓库。未配置令牌时服务只接受loopback访问。可用 `python scripts/kstock_api_client.py capabilities` 做只读健康检查。
+
 ## 运行组件
 
-1. `monitor_runtime.py poll`：按Asia/Shanghai解析当前档位，并优先返回pending任务。
+1. `monitor_runtime.py --backend kstock poll`：按Asia/Shanghai解析当前档位，从KStock读取当天全部运行，静默跳过已完成档并优先返回未完成任务。
 2. `wind_cli_client.py`：发现项目本地Wind技能并用唯一临时请求文件调用。
-3. `wind_response_adapter.py`：保存脱敏原始回包并输出稳定Schema；失败进入自愈SOP。
-4. `calculate_monitor.py`：执行盘中、趋势、行业5日和个股5日计算。
+3. `wind_response_adapter.py`：输出稳定Schema；脱敏原始回包和每次尝试经KStock接口立即落库，失败进入自愈SOP。
+4. `calculate_monitor.py`：执行盘中、趋势、行业5日和个股5日计算；生产盘中使用 `intraday-kstock` 从已完成MySQL事实重建基准，`intraday --state` 仅用于离线回放。
 5. `build_close_report.py`：把15:10所有组件合并为一个稳定报告ID。
 6. `render_feishu_card.py`：只从带显式报告契约的规范化JSON生成卡片；15:00固定为盘中四表，15:10固定为单张收盘决策摘要卡，契约冲突直接失败。
-7. `deliver_report.py`：验证卡片并调用 `kstock_feishu_delivery.py`，持久化交付结果。
-8. `stage_rendered_cards.py`：把已由官方渲染器生成并验证的卡片原样绑定到交付包，确保发送内容不被二次改写。
+7. `kstock_workflow.py`：从stdin接收当前阶段对象，依次提交事实、报告和不可变卡片，并请求KStock发送；任一失败不完成运行。
+8. `kstock_api_client.py`：实现版本化HTTP契约、认证、幂等键与可重试错误分类，不直接连接MySQL。
+9. KStock outbox：只重试已经落库的同一卡片，不调用Wind、不重新计算、不选择第二个接收目标。
+
+`deliver_report.py`、`kstock_feishu_delivery.py`和文件状态后端仅保留给旧版离线回放与迁移测试，禁止作为正式生产路径。
 
 ## 验收清单
 
@@ -49,7 +64,7 @@ npx skills add Wind-Information-Co-Ltd/wind-skills --skill wind-mcp-skill -y
 - 运行 `python -m unittest discover -s tests -v`。
 - 验证09:30、午休、15:00、15:10、周末和UTC输入的路由fixture。
 - 使用脱敏fixture验证旧Wind信封、新字段名、列式数组、未知单位、空结果和100行截断。
-- 在测试数据库中验证优先任务、单一群聊、歧义失败和日志脱敏。
+- 在MySQL 8隔离测试库中验证DDL、金额精度、MEDIUMBLOB、唯一约束、优先任务、接收标识不出API和日志脱敏。
 - 沙箱验证导入、文件访问、进程和网络代码均被拒绝。
 - 集成环境试发卡时确认15:00一张盘中四表卡且标题不含“收盘”，15:10一张同报告ID的收盘决策摘要卡；模拟向15:00载荷注入`top10`、向15:10载荷注入`intraday`类型或旧分片`card_mode`时必须拒绝发送；模拟发送失败后只重试已持久化的同一卡片。
 - 不在无授权环境发真实飞书消息或消耗Wind额度。
@@ -74,3 +89,13 @@ python scripts/calculate_monitor.py stock-5d --input stock-days.json --output st
 ```
 
 构建报告时传入 `--simulation-label "历史演练 YYYY-MM-DD"`。唯一一张收盘卡必须通过 `render_feishu_card.py --part 1` 生成，再用 `stage_rendered_cards.py` 原样装入报告包；只有用户明确授权后才调用 `deliver_report.py`。历史演练报告不得更新或占用对应历史生产档位。
+
+## 旧状态一次性入库
+
+先只扫描数量，不连接KStock：
+
+```bash
+python scripts/import_legacy_state.py --state-root <旧automation-state目录>
+```
+
+确认范围后显式增加 `--apply`。导入运行使用 `run_kind=legacy_import`，绝不发送飞书；历史规范化文件缺少完整Wind原始信封，因此标记 `raw_missing/completed_with_limits`，不会伪造成完整可审计生产数据。重复导入由数据库唯一键跳过。

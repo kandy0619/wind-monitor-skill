@@ -2,7 +2,7 @@
 
 ## 依赖
 
-使用按主技能“依赖安装”流程发现或安装的 `wind-mcp-skill`，它可以位于当前项目或全局技能目录，不要求与本技能同级。调用前完整读取其 `SKILL.md`，并按领域读取：
+正式监控只使用KStock项目本地 `.agents/skills/wind-mcp-skill` 和项目凭据，不回退到用户级或全局安装。调用前完整读取其 `SKILL.md`，并按领域读取：
 
 - 股票：`references/stock.md` 和需要时的 `stock-indicators.md`。
 - 指数：`references/index.md` 和需要时的 `index-indicators.md`。
@@ -116,34 +116,14 @@ A2按A1的10个完整行业名称精确匹配。Wind可能因完整名称包含�
 
 严格使用Wind返回的单位元数据。金额为元时除以1亿展示为亿元；金额已为亿元时不再换算；百万元除以100换算为亿元。百分比保留Wind字段本身的百分比口径，不在缺少元数据时擅自乘100。
 
-## 状态文件
+## KStock持久化映射
 
-### 脱敏原始回包
+正式运行的唯一状态源是KStock MySQL：
 
-路径：`.codex/automation-state/a-share-monitor-raw/YYYYMMDD/HHMM/<request-id>.json`
+- 每次Wind调用把请求契约、脱敏原始成功/错误信封、实际调用时间、SHA-256和错误分类写入`wind_monitor_request_attempts`。规范化失败仍必须先提交该记录，供确定性适配和LLM二次适配审计。
+- 股票、指数、行业和板块候选写入`wind_flow_observations`；金额统一为元，Wind时间、单位来源和provenance不得丢失。
+- 行业双榜、行业个股Top 3、四板块样本和收盘Top 10写入`wind_flow_rankings`。
+- 档位状态与租约写入`wind_monitor_runs`，迁移过程写入`wind_monitor_run_events`。15:00键语义固定为`15:00/intraday/production`，15:10固定为`15:10/close/production`。
+- 计算结果、Codex两版文本和统一载荷写入`wind_monitor_reports`；渲染后的原样卡片写入`wind_monitor_deliveries`。
 
-每次Wind调用先保存脱敏后的原始成功或错误信封、请求标识、服务/工具、计划档位、实际调用时间和SHA-256。不得保存Key、令牌、飞书凭据或接收标识。规范化失败仍保留该文件，供确定性适配和大模型二次适配重放。
-
-### 盘中状态
-
-路径：`.codex/automation-state/a-share-watchlist-main-flow-10m.json`
-
-顶层包含 `trade_date`、`baseline_type`、`baseline_note`、`stocks`、`indexes`。每个实体保存 `name`、`open_baseline_yuan`、`previous_yuan`、`previous_time`。
-
-### 收盘趋势样本
-
-路径：`.codex/automation-state/a-share-close-main-add-samples/YYYYMMDD.json`
-
-至少保存：交易日、计划取样时点、实际Wind时间、板块查询完整性、股票代码、简称、来源板块、板块内排名、累计主力净流入原始值、单位、涨跌幅、主力占比。
-
-### 收盘结果
-
-路径：`.codex/automation-state/a-share-close-main-add-top10/YYYYMMDD.json`
-
-至少保存：四板块原始候选、去重结果、综合Top 10、每只股票有效趋势样本、相邻增量、趋势分类、趋势变化额、主力净流入合计、平均收益率、Wind数据时间和数据限制。
-
-### 运行档位状态
-
-路径：`.codex/automation-state/a-share-monitor-run-slots/YYYYMMDD.json`
-
-使用 `monitor_runtime.py` 的Schema v2，以 `HH:MM:mode` 为键保存 `planned_time`、`mode`、`status`、`triggered_at`、`last_attempt_at`、`completed_at`、`wind_data_time`、`failure_stage`、`last_error`、`artifacts` 和 `delivery`。同一交易日、计划档位和模式只成功处理一次；只有规定的业务状态文件全部落盘后才写成功状态。失败不得占用档位。15:00键为 `15:00:intraday`，15:10键为 `15:10:close`。
+文件状态路径只属于`--backend file`离线回放或`import_legacy_state.py`一次性迁移，不得在正式监控中与MySQL双主写。任何表均不得保存Key、令牌、飞书凭据或接收标识。

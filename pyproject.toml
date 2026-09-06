@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wind-monitor-contracts"
+version = "1.0.0"
+description = "Versioned KStock persistence contract for wind-monitor-skill"
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["wind_monitor_contracts"]

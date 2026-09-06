@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -216,7 +217,7 @@ class SlotStateStore:
 def pending_tasks(manifest: dict[str, Any]) -> list[SlotTask]:
     pending = []
     for entry in manifest.get("slots", {}).values():
-        if str(entry.get("status", "")).startswith("pending"):
+        if entry.get("status") not in TERMINAL_STATUSES:
             pending.append(SlotTask(entry["planned_time"], entry["mode"]))
     return sorted(pending, key=lambda task: (task.planned_time, task.mode))
 
@@ -249,9 +250,35 @@ def plan_poll(now: datetime, manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def manifest_from_runs(trade_date: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the router's read model from KStock's durable day rows."""
+    manifest = empty_manifest(trade_date)
+    for run in runs:
+        task = SlotTask(run["planned_time"], run["mode"])
+        manifest["slots"][task.key] = {
+            "planned_time": task.planned_time,
+            "mode": task.mode,
+            "status": run["status"],
+            "run_id": run.get("id"),
+            "failure_stage": run.get("failure_stage"),
+        }
+    return manifest
+
+
+# Backward-compatible import name for callers created during the v1 transition.
+manifest_from_pending = manifest_from_runs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-root", type=Path, default=Path(".codex/automation-state"))
+    parser.add_argument(
+        "--backend",
+        choices=("kstock", "file"),
+        default=os.getenv("WIND_MONITOR_STORAGE_BACKEND", "kstock"),
+        help="production uses kstock; file is retained only for replay and migration",
+    )
+    parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--at", help="timezone-aware ISO timestamp; intended for tests and replay")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("poll")
@@ -260,6 +287,30 @@ def main() -> None:
     args = parser.parse_args()
     now = parse_now(args.at)
     trade_date = args.trade_date if args.command == "migrate" and args.trade_date else now.date().isoformat()
+    if args.backend == "kstock":
+        if args.command != "poll":
+            parser.error("migrate is only available with --backend file")
+        local_only_plan = plan_poll(now, empty_manifest(trade_date))
+        if local_only_plan.get("reason") in {"weekend", "invalid_time"}:
+            print(json.dumps(local_only_plan, ensure_ascii=False, indent=2))
+            return
+        try:
+            from kstock_api_client import KStockClient
+        except ModuleNotFoundError:
+            from scripts.kstock_api_client import KStockClient
+        client = KStockClient.from_environment(args.project_root)
+        client.capabilities()
+        context = client.context()
+        runs = client.day_runs(context["task_id"], trade_date)
+        result = plan_poll(now, manifest_from_runs(trade_date, runs))
+        result.update({
+            "storage_backend": "kstock",
+            "task_id": context["task_id"],
+            "task_name": context["task_name"],
+            "recipient_config_version": context["recipient_config_version"],
+        })
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     path = args.state_root / "a-share-monitor-run-slots" / f"{trade_date.replace('-', '')}.json"
     store = SlotStateStore(path, trade_date)
     manifest = store.load()
