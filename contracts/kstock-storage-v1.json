@@ -1,0 +1,42 @@
+{
+  "api_version": "1",
+  "contract_version": "1.0",
+  "base_path": "/api/v1/internal/wind-monitor",
+  "authentication": "Bearer KSTOCK_AGENT_TOKEN or loopback-only",
+  "recipient_identifiers_in_responses": false,
+  "endpoints": [
+    "GET /capabilities",
+    "GET /context",
+    "GET /runs/day",
+    "GET /runs/pending",
+    "POST /runs/claim",
+    "POST /runs/{run_id}/lease/renew",
+    "GET /runs/{run_id}",
+    "POST /runs/{run_id}/attempts",
+    "POST /runs/{run_id}/facts:commit",
+    "POST /runs/{run_id}/adapter-incidents",
+    "POST /runs/{run_id}/fail",
+    "POST /runs/{run_id}/report:commit",
+    "POST /reports/{report_id}/card:commit",
+    "POST /reports/{report_id}/feishu:dispatch",
+    "POST /runs/{run_id}/complete",
+    "GET /reports/previous",
+    "GET /observations",
+    "GET /rankings",
+    "GET /reports"
+  ],
+  "report_contracts": {
+    "15:00": {
+      "mode": "intraday",
+      "report_type": "intraday",
+      "required_parts": 1,
+      "required_normalized_fields": ["report_type", "planned_time"]
+    },
+    "15:10": {
+      "mode": "close",
+      "report_type": "close_summary",
+      "required_parts": 1,
+      "required_normalized_fields": ["report_type", "planned_time", "card_mode", "top10", "industry_5d", "stock_5d"]
+    }
+  }
+}

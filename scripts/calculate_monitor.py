@@ -8,6 +8,7 @@ precision and leaves display rounding to the report renderer.
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 
 def read_json(path):
@@ -96,6 +97,93 @@ def calculate_intraday(payload, state):
     else:
         result["index_total"] = None
     return result, state
+
+
+def _stored_number(value: Any) -> int | float | None:
+    """Convert KStock's exact DECIMAL string into a calculation-only number."""
+    if value is None:
+        return None
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+def intraday_state_from_observations(
+    payload: dict[str, Any], observations: list[dict[str, Any]],
+) -> tuple[dict[str, Any], int | float | None]:
+    """Rebuild the transient intraday baseline from completed KStock facts.
+
+    No state is written locally. Only successful earlier slots on the current
+    trading day are considered; the KStock endpoint enforces that filter by
+    default and this function defensively excludes the current/later slots.
+    """
+    trade_date = payload["trade_date"]
+    planned_time = payload["planned_time"]
+    state: dict[str, Any] = {
+        "trade_date": trade_date,
+        "baseline_type": "first_available",
+        "baseline_note": payload.get("baseline_note", "使用当天首个成功采样作为基准"),
+        "stocks": {},
+        "indexes": {},
+    }
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    index_slots: dict[str, dict[str, int | float]] = {}
+    for item in observations:
+        entity_type = item.get("entity_type")
+        code = item.get("entity_code")
+        item_time = item.get("planned_time")
+        if (
+            item.get("trade_date") != trade_date
+            or entity_type not in {"stock", "index"}
+            or not code
+            or not item_time
+            or item_time >= planned_time
+            or item.get("main_net_inflow_yuan") is None
+        ):
+            continue
+        number = _stored_number(item["main_net_inflow_yuan"])
+        normalized = dict(item)
+        normalized["_number"] = number
+        grouped.setdefault((entity_type, code), []).append(normalized)
+        if entity_type == "index" and number is not None:
+            index_slots.setdefault(item_time, {})[code] = number
+
+    for (entity_type, code), items in grouped.items():
+        items.sort(key=lambda row: (row["planned_time"], row.get("id") or 0))
+        first, last = items[0], items[-1]
+        target = state["indexes" if entity_type == "index" else "stocks"]
+        target[code] = {
+            "name": last.get("entity_name"),
+            "open_baseline_yuan": first["_number"],
+            "previous_yuan": last["_number"],
+            "previous_time": last.get("wind_data_time") or last.get("observed_at"),
+        }
+
+    index_codes = {
+        row.get("code")
+        for row in payload.get("indexes", [])
+        if isinstance(row, dict) and row.get("code")
+    }
+    previous_index_sum = None
+    if index_codes:
+        complete_slots = [
+            (slot, values) for slot, values in index_slots.items()
+            if index_codes.issubset(values)
+        ]
+        if complete_slots:
+            _, latest_values = max(complete_slots, key=lambda item: item[0])
+            previous_index_sum = sum(latest_values[code] for code in index_codes)
+    return state, previous_index_sum
+
+
+def calculate_intraday_from_observations(
+    payload: dict[str, Any], observations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Calculate one slot using MySQL-backed facts instead of a JSON state file."""
+    state, previous_index_sum = intraday_state_from_observations(payload, observations)
+    current = dict(payload)
+    current["previous_index_sum_yuan"] = previous_index_sum
+    result, _ = calculate_intraday(current, state)
+    return result
 
 
 def classify_trend(samples):
@@ -288,6 +376,10 @@ def main():
     intraday.add_argument("--input", required=True)
     intraday.add_argument("--state", required=True)
     intraday.add_argument("--output", required=True)
+    intraday_kstock = sub.add_parser("intraday-kstock")
+    intraday_kstock.add_argument("--input", required=True)
+    intraday_kstock.add_argument("--output", required=True)
+    intraday_kstock.add_argument("--project-root", type=Path, default=Path.cwd())
     close = sub.add_parser("close-trend")
     close.add_argument("--input", required=True)
     close.add_argument("--output", required=True)
@@ -306,6 +398,18 @@ def main():
         result, updated = calculate_intraday(payload, state)
         write_json(args.state, updated)
         write_json(args.output, result)
+    elif args.command == "intraday-kstock":
+        try:
+            from kstock_api_client import KStockClient
+        except ModuleNotFoundError:
+            from scripts.kstock_api_client import KStockClient
+        client = KStockClient.from_environment(args.project_root)
+        client.capabilities()
+        observations = client.observations(
+            payload["trade_date"], trade_date_to=payload["trade_date"],
+            completed_only=True, limit=10000,
+        )
+        write_json(args.output, calculate_intraday_from_observations(payload, observations))
     elif args.command == "close-trend":
         write_json(args.output, calculate_close(payload))
     elif args.command == "industry-5d":

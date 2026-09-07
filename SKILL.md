@@ -1,6 +1,6 @@
 ---
 name: wind-monitor-skill
-description: 使用万得Wind金融数据执行A股资金流向监控、固定时点采样和收盘主力加仓榜，并按渠道生成飞书精简卡片及Codex精简版+完整审计版。用于生成或维护本项目的A股10分钟资金报告、自选股机构/大户/中户/散户明细、四个代表指数主力合计、Wind行业流入流出Top 5及行业个股Top 3、四板块候选合并Top 10、全日资金趋势、定时任务和状态文件。用户提到Wind资金监控、盘中资金流向、主力加仓榜、收盘榜、飞书资金报告或本项目自动化a-10时触发。
+description: 使用万得Wind金融数据执行A股资金流向监控、固定时点采样和收盘主力加仓榜，并按渠道生成飞书精简卡片及Codex精简版+完整审计版。用于生成或维护本项目的A股10分钟资金报告、自选股机构/大户/中户/散户明细、四个代表指数主力合计、Wind行业流入流出Top 5及行业个股Top 3、四板块候选合并Top 10、全日资金趋势、Codex定时入口和KStock持久化。用户提到Wind资金监控、盘中资金流向、主力加仓榜、收盘榜、飞书资金报告或本项目自动化a-10时触发。
 ---
 
 # Wind A股资金监控
@@ -36,7 +36,9 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 先把自动化提供的当前时刻转换为 Asia/Shanghai，再解析已经到达的“计划档位”。`2026-08-13T05:10:41Z` 必须解释为北京时间 `2026-08-13 13:10:41+08:00`，应命中13:10档，绝不能判断为“13:10尚未到达”。本任务不设置执行宽限或超时放弃：一旦某个计划档位已经到达并被任务触发，即使实际开始、取数、制卡或发送已经晚于计划时刻，也必须继续设法完成，不得因为延迟、运行耗时或已经进入下一档而静默结束。
 
-每次触发先读取当日状态中的 `pending` 未完成队列，按计划时间从早到晚重试；随后处理本次触发时刻对应的最新已到达档位。失败档必须写入或保留 `pending`，后续触发继续重试，直到Wind取数、计算、落盘和飞书发送全部成功。不得扫描并补发从未触发、也未进入 `pending` 的历史档位，避免伪造历史时点报告。计划档位决定报告或样本标签，实际执行时间和Wind返回的真实交易时间必须另行保存；延迟执行不得把当前实时值伪装成计划时刻值。
+每次正式触发先运行 `python scripts/monitor_runtime.py --backend kstock poll`，通过KStock内部HTTP接口读取当天所有档位状态。按计划时间从早到晚重试未完成档，再处理当前触发档。失败档必须在MySQL中保留可恢复状态，后续触发继续重试，直到Wind取数、计算、落库和飞书发送全部成功。不得扫描并补发从未触发、也未登记的历史档位。计划档位决定报告或样本标签，实际执行时间和Wind返回的真实交易时间必须另行保存。
+
+对 `pending_render` 或 `pending_send` 的报告档，先通过stdin调用 `python scripts/kstock_workflow.py resume` 并传入 `run_id`。该入口从KStock取回已持久化报告，缺卡时用官方renderer重渲染，有卡时由KStock原样重发；不得再次请求Wind。只有尚未形成可恢复报告的 `pending_fetch/pending_adapt/pending_calculate` 才继续对应的数据或计算阶段。
 
 按解析后的计划档位选择模式：
 
@@ -45,7 +47,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 - 收盘档：15:10读取15:00收盘数据，生成“四板块各Top 5候选合并榜”Top 10报告。
 - 其它时间：静默结束。
 
-执行前检查当日档位状态。同一“交易日 + 计划档位 + 模式”只成功处理一次；已完成的重复触发静默结束。报告档只有Wind取数、计算、规定状态文件落盘和飞书发送全部成功后才从 `pending` 移入 `completed`；任一步失败都必须保留待重试状态、失败阶段和最后错误，不得占用完成档位。档位状态保存到 `.codex/automation-state/a-share-monitor-run-slots/YYYYMMDD.json`。
+执行前检查KStock当天档位状态。同一“任务 + 交易日 + 计划档位 + 模式 + 运行类型”只成功处理一次；已完成的重复触发静默结束。报告档只有Wind取数、计算、事实/报告/卡片落库和飞书发送全部成功后才进入 `completed`；任一步失败都保留待重试状态、失败阶段和脱敏错误。正式运行禁止以 `.codex/automation-state` JSON作为主状态；文件后端只允许离线回放、测试和一次性历史迁移。
 
 手工预览不受推送时刻限制，但必须在标题标注“盘中预览”或“历史预览”，不得冒充收盘报告。
 
@@ -54,13 +56,14 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 15:00是最后一个标准10分钟盘中报告档，语义和09:30—14:50各档完全一致：规范化卡片输入必须写 `report_type=intraday`、`planned_time=15:00`，并使用上一成功盘中档（通常14:50）计算近10分钟变化。它必须输出一张包含代表指数、自选股、行业流入Top 5、行业流出Top 5的盘中四表卡，标题不得出现“收盘”“收盘榜”或“全日趋势”。15:10才是独立的收盘总结档，不能以15:00已完成为由跳过，也不能把任一档内容或布局替换成另一档。
 
 1. 批量查询3只自选股和4个代表指数。自选股名称与Wind代码以 [references/monitor-spec.md](references/monitor-spec.md) 和 [references/wind-query-map.md](references/wind-query-map.md) 的当前清单为准，不得沿用历史运行文件中的旧清单。行业数据必须按 [references/wind-query-map.md](references/wind-query-map.md) 的“两阶段行业双榜”执行：先单独取得Wind行业汇总净流入Top 5和净流出Top 5，再以这10个Wind行业完整名称单独查询各行业主力净流入Top 3个股。禁止在同一次 `analytics_data.get_financial_data` 调用中混合索取行业汇总行和个股明细行。
+   Wind把末级行业降成父级或缩短名称时，不得模糊映射。按查询映射调用`scripts/industry_pipeline.py`：批量B仅收完整路径精确匹配行，不足时用`stock_data.search_stocks`按明确Wind行业层级逐行业串行补查，并丢弃父级、兄弟行业行。A1已直接返回的主力流入/流出金额可以保留；A2只能用完整路径精确行补缺，不能用父级金额覆盖。
    行业分析接口返回的是调用时可得的当日累计值，但通常不提供可核验的盘中时间戳。每个盘中档的A1、A2、B问题必须包含本次计划档位和唯一调用时刻，禁止复用同日早先请求文件或响应。若行业双榜与上一档完全相同且无行业时间戳，使用带唯一调用时刻的改写请求重新查询一次；仍相同则保留真实结果，并在状态中标记 `industry_update_status=unverified_unchanged`，不得声称发生了10分钟行业变化。
 2. 校验所有返回的最新交易日均为当天，交易时间没有明确停留在旧时段。时效判断只依据 Wind 返回的交易日、交易时间、响应元数据或明确的缓存标识；行业双榜与上一成功档逐项相同仅表示数值可能未变化，不能单独作为陈旧证据，也不得因此停止交付。若行业接口不返回可核验时间，但本次请求成功且没有明确陈旧标识，应保留本次真实返回并继续报告；只有存在明确旧交易日、旧时间戳或缓存标识时才按陈旧处理。任一核心数据缺失时保留其它明细，但四指数合计必须显示“Wind未完整返回”。
-3. 读取 `.codex/automation-state/a-share-watchlist-main-flow-10m.json`。新交易日清空旧状态；当天首个成功采样建立首个可用基准。
+3. 从KStock查询当天上一成功盘中档的规范化观测。当天首个成功采样建立首个可用基准。
    自选股清单在交易日内更新时，保留仍在新清单中的股票历史值；新增股票以更新后的首个成功采样建立基准，旧状态中已不在清单的股票不得再查询、展示或参与任何统计。
-4. 运行 `python3 scripts/calculate_monitor.py intraday --input <normalized.json> --state <state.json> --output <result.json>`，或严格复现该脚本算法。
+4. 正式运行使用 `python3 scripts/calculate_monitor.py intraday-kstock --input <normalized.json> --output <result.json> --project-root <KStock目录>`：脚本从KStock读取当天已完成档位的事实，在内存中重建首档基准与上一成功档，不写本地状态。`intraday --state` 仅供离线回放和旧数据迁移，禁止作为生产状态。
 5. 从同一份计算结果生成精简版和完整审计版。严格按参考规格的“双渠道输出”投递：飞书只发送精简版，Codex先展示精简版再展示完整审计版。13:00与11:30上一成功样本比较时标注“跨午休比较”。
-6. 只在展示层四舍五入到1位小数；状态文件保留Wind原始精度。
+6. 只在展示层四舍五入到1位小数；MySQL规范化事实保留Wind原始精度。
 
 ## 固定时点趋势取样
 
@@ -69,7 +72,7 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 1. 分别查询沪市主板、深市主板、创业板、科创板当日主力净流入Top 5；这是上市板块范围，不是代表指数成分股范围。
 2. 每个板块必须得到5只不同股票。Wind少返、重复或不声明完整性时保存实际结果和限制，禁止补齐。
 3. 保存每只股票的Wind代码、简称、来源板块、板块内排名、主力净流入额、涨跌幅、主力占比和Wind交易时间。
-4. 追加写入 `.codex/automation-state/a-share-close-main-add-samples/YYYYMMDD.json`，按“计划取样时点 + Wind代码”去重。延迟执行时仍写用户指定的计划时点，同时保存真实执行时间和Wind时间；重复触发不重复追加。
+4. 通过KStock接口写入趋势样本观测和板块排名，按“运行 + 计划取样时点 + Wind代码”去重。延迟执行时仍写计划时点，同时保存真实执行时间和Wind时间；重复触发不重复追加。
 5. 取样档失败时进入 `pending` 并在后续触发继续重试，不因超过任意分钟数而放弃。不用插值，不得把其它计划档位已保存的数据移作本档样本；若只能取得延迟时刻的实时数据，必须明确记录真实Wind时间，不能冒充计划时点快照。
 
 ## 15:10收盘工作流
@@ -80,20 +83,20 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 4. 计算Top 10主力净流入合计和有效股票涨跌幅算术平均值；不计算上涨、下跌家数。
 5. 从固定时点快照中提取最终Top 10的真实样本。至少3个有效时点才分类，否则写“样本不足”。运行 `python3 scripts/calculate_monitor.py close-trend --input <samples.json> --output <result.json>`，或严格复现该脚本算法。
 6. 15:00收盘值只用于最终榜单、收盘资金金额和涨跌幅，不加入用户指定的9个趋势样本。
-7. 把原始榜单、样本、计算结果和限制保存到 `.codex/automation-state/a-share-close-main-add-top10/YYYYMMDD.json`。
+7. 把脱敏Wind请求、候选、样本、Top 10、计算结果、报告和限制通过KStock接口分阶段持久化。
 8. 从同一份收盘结果生成精简版和完整审计版。严格按参考规格的“双渠道输出”投递：飞书只发送精简版，Codex先展示精简版再展示完整审计版。
 9. 查询包含当日在内的最近5个A股交易日全部Wind末级行业日频主力净流入额，每个交易日应覆盖相同的完整行业集合；保存每日原始行业表。运行 `python3 scripts/calculate_monitor.py industry-5d --input <industry-days.json> --output <industry-5d.json>`，生成近5日净加仓/净减仓Top 5、加仓/减仓天数Top 5、累计加仓/累计减仓金额Top 5，并合并进收盘精简版、完整审计版和飞书卡片。不得只用每日Top 5样本推算全行业排名。
 10. 对全部A股通过 `stock_data.search_stocks` 执行六次单方向跨日排名：5日净流入额、净流出额、加仓天数、减仓天数、累计加仓金额、累计减仓金额，各取Top 5。不要在一个问题中合并正反方向；Wind曾出现重复同一组结果。随后按三组候选分别补查5个交易日逐日主力净流入额与Wind完整行业，只纳入5日逐日值均完整的股票；使用 `python3 scripts/calculate_monitor.py stock-5d --input <stock-candidates.json> --output <stock-5d.json>` 本地复算、去重和稳定排序。优先使用包含收盘日的最近5个完整交易日；若当日日频尚不可得，则改用Wind最近5个完整交易日，并在精简版、审计版和唯一收盘飞书卡片明确统计区间。不得用空值补0，也不得把不足5日的新股或停牌股纳入排名。
 
 ## 双渠道交付
 
-- 先完成完整Wind取数、计算和状态落盘，再由同一结果派生两个展示版本；不得为了精简展示减少查询、截断状态或丢弃原始字段。
-- 飞书使用 KStock 的 `backend/services/feishu_bot.py` `send_card`，只推送参考规格定义的可视化精简卡片。严格使用参考规格规定的标题主题色、图标、涨跌箭头、彩色数值、状态标签、紧凑表格和末级行业名；不得退化为大段纯文字，不得把完整审计表附在飞书卡片后，也不得发送第二条完整报告。
-- 所有飞书卡片必须运行 `python scripts/render_feishu_card.py --input <current-normalized.json> --output <card.json>` 生成，并把生成的完整 JSON 原样传给 `send_card`。报告类型只由显式的 `planned_time + report_type + card_mode` 契约决定，禁止根据是否出现 `top10`、`stock_5d` 等字段猜测类型。盘中档写 `report_type=intraday` 并追加 `--previous <previous-normalized.json>`；当天首档可省略 `--previous`。15:10写 `report_type=close_summary`、`card_mode=close-summary`并省略 `--previous`；载荷必须同时包含Top 10、行业5日和个股5日结果，渲染成唯一一张“收盘资金决策摘要”卡。契约冲突必须记为 `pending_render` / `report_contract_mismatch` 并停止发送，不能自动改标题、换模板或降级。完整六类榜单仍保存在状态和Codex审计版，飞书只展示行业与个股三维共振Top 3，不得再发送完整审计版到飞书。不得在自动化临时脚本中手写、删减或替换卡片结构。
+- 先完成完整Wind取数、计算和MySQL分阶段持久化，再由同一结果派生两个展示版本；不得为了精简展示减少查询、截断状态或丢弃原始字段。
+- 飞书交付必须经过KStock内部HTTP接口，由KStock在服务端解析唯一群聊并调用 `backend/services/feishu_bot.py` `send_card`。Skill与Codex不得读取、返回或记录群聊标识。
+- 所有飞书卡片只能由 `scripts/render_feishu_card.py` / `scripts/kstock_workflow.py` 从规范化对象生成，校验后把同一JSON不可变落库并原样发送。报告类型只由显式的 `planned_time + report_type + card_mode` 契约决定。盘中档写 `report_type=intraday` 并传上一成功盘中对象；当天首档可省略。15:10写 `report_type=close_summary`、`card_mode=close-summary`且不传previous；载荷必须同时包含Top 10、行业5日和个股5日结果，渲染唯一一张收盘卡。契约冲突记为 `pending_render/report_contract_mismatch`，不得改标题、换模板或降级。
 - Codex 对报告档先展示与飞书信息等价的精简版，再以 `完整报告（审计）` 为标题展示参考规格要求的全部表格和必要限制。精简版不能替代完整审计版。
 - 纯取样档、已完成的重复档和非交易日继续静默，不输出精简版或完整版。报告档不得仅因触发延迟、执行耗时、进入下一档或发送失败而静默；必须保留 `pending` 并继续完成飞书交付。
-- 报告档只有在Wind取数、计算、规定状态落盘和飞书精简卡片发送全部成功后才标记完成。飞书失败时保留已落盘数据和待发送卡片，记录为 `pending_send`；后续触发优先直接重试发送，避免无必要地重复Wind取数。没有可复用结果时才从失败阶段继续执行。
-- 15:10使用 `scripts/build_close_report.py` 合并为一个带稳定 `report_id` 的逻辑报告，再用 `scripts/deliver_report.py` 渲染、校验和发送唯一一张精简决策卡。发送成功前，15:10不得标记完成；失败时复用已持久化卡片重试，不重复取Wind。
+- 报告档只有在Wind取数、计算、事实/报告/卡片落库和飞书精简卡片发送全部成功后才标记完成。飞书失败时MySQL保留已落库数据和不可变卡片并记为 `pending_send`；KStock outbox或后续Codex触发只重发同一卡片，不重复Wind取数。
+- 15:10使用 `scripts/build_close_report.py` 合并为一个带稳定 `report_id` 的逻辑报告，再用 `scripts/kstock_workflow.py` 落库、渲染、校验并发送唯一一张精简决策卡。发送成功前，15:10不得标记完成。
 - 飞书接收群必须从KStock现有启用且 `feishu_chat_id` 非空的 `MonitorTask` 动态读取，优先使用任务名 `监控-神龙7-全盘`，并使用 `receive_id_type=chat_id`。每个报告档只向该群发送精简卡片，不再向 `feishu_user_id` 或其它接收目标发送；不得在报告、日志或Codex输出中暴露接收群标识。
 
 ## 数据纪律
