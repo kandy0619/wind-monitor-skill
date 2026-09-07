@@ -111,6 +111,8 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 
 `scripts/kstock_workflow.py` 提供 `claim / attempt / facts / incident / failure / report / resume / dispatch / complete` 全流程入口，输入统一从stdin读取。报告先于渲染落库；`resume` 可直接使用已持久化规范化报告重渲染或重发，且不会再次请求Wind。
 
+标准盘中档由 `scripts/run_intraday.py` 执行完整确定性链路。它先尝试批量行业查询；Wind若把末级行业降成父级，则自动按明确行业层级逐行业补查，只接受目标行业行，并把行业Top 3的Wind代码写入MySQL。该入口不会用父级或兄弟行业补齐末级行业。
+
 ### Codex
 
 先展示与飞书信息等价的精简版，再展示包含原始字段、计算过程和必要限制的完整审计版。
@@ -145,6 +147,9 @@ wind-monitor-skill/
 │   ├── kstock_feishu_delivery.py
 │   ├── kstock_api_client.py
 │   ├── kstock_workflow.py
+│   ├── run_intraday.py
+│   ├── industry_pipeline.py
+│   ├── intraday_report.py
 │   ├── import_legacy_state.py
 │   ├── collect_historical_industry.py
 │   ├── collect_historical_stock.py

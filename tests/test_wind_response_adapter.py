@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def load_module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -31,6 +33,63 @@ class WindResponseAdapterTest(unittest.TestCase):
         self.assertEqual(row["industry"], "信息技术--软件")
         self.assertEqual(row["net_yuan"], 125_000_000)
         self.assertEqual(row["gross_inflow_yuan"], 300_000_000)
+
+    def test_reads_current_wind_table_level_unit_mapping(self):
+        embedded = {
+            "data": {
+                "columns": [
+                    {"name": "最新交易日", "type": "string"},
+                    {"name": "交易时间", "type": "string"},
+                    {"name": "中文简称", "type": "string"},
+                    {"name": "涨跌幅", "type": "string"},
+                    {"name": "当日主力净流入额", "type": "string"},
+                    {"name": "Wind代码", "type": "string"},
+                ],
+                "rows": [["20260904", "2026-09-04T15:30:58+08:00", "中芯国际", "-2.20", "-329121293", "688981.SH"]],
+                "unit": {"当日主力净流入额": "元"},
+            },
+            "error": None,
+        }
+        raw = {"content": [{"type": "text", "text": __import__("json").dumps(embedded, ensure_ascii=False)}]}
+        result = adapter.adapt_response(raw, "stock")
+        self.assertEqual(result.records[0]["main_yuan"], -329_121_293)
+        self.assertEqual(result.records[0]["trade_date"], "2026-09-04")
+
+    def test_industry_summary_accepts_combined_five_plus_five_contract(self):
+        raw = [
+            {"行业名称": f"行业{index}", "主力净流入额(亿元)": 10 - index}
+            for index in range(10)
+        ]
+        result = adapter.adapt_response(raw, "industry_summary")
+        self.assertEqual(len(result.records), 10)
+
+    def test_industry_stock_accepts_ten_industries_with_three_rows_each(self):
+        raw = [
+            {
+                "Wind行业完整名称": f"行业{industry}",
+                "Wind代码": f"{industry:03d}{rank:03d}.SZ",
+                "证券简称": f"股票{industry}-{rank}",
+                "当日主力净流入额(亿元)": 10 - rank,
+                "涨跌幅": rank,
+                "排名": rank,
+            }
+            for industry in range(10)
+            for rank in range(1, 4)
+        ]
+        result = adapter.adapt_response(raw, "industry_stock")
+        self.assertEqual(len(result.records), 30)
+
+    def test_industry_stock_maps_current_wind_industry_detail_column(self):
+        raw = [{
+            "Wind代码": "688256.SH",
+            "证券简称": "寒武纪",
+            "所属WIND行业明细": "信息技术--半导体产品",
+            "2026年9月4日主力净流入额(百万元)": 220.1464,
+            "2026年9月4日涨跌幅(%)": -2.5446,
+        }]
+        result = adapter.adapt_response(raw, "industry_stock")
+        self.assertEqual(result.records[0]["industry"], "信息技术--半导体产品")
+        self.assertEqual(result.records[0]["main_yuan"], 220_146_400)
 
     def test_model_candidate_maps_unknown_label_but_not_values(self):
         raw = [{"领域": "半导体", "资金差": 2.5}]

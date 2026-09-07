@@ -62,6 +62,7 @@ class KStockClient:
         payload: dict[str, Any] | None = None,
         *,
         idempotency_key: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers = {"Accept": "application/json"}
@@ -73,7 +74,10 @@ class KStockClient:
             headers["Idempotency-Key"] = idempotency_key
         request = urllib.request.Request(self.base_url + path, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+            ) as response:
                 content = response.read()
                 return json.loads(content.decode("utf-8")) if content else {}
         except urllib.error.HTTPError as error:
@@ -189,7 +193,14 @@ class KStockClient:
 
     def dispatch_feishu(self, report_id: str, part_index: int = 0) -> dict[str, Any]:
         query = urllib.parse.urlencode({"part_index": part_index})
-        return self._request("POST", f"/reports/{urllib.parse.quote(report_id, safe='')}/feishu:dispatch?{query}")
+        return self._request(
+            "POST",
+            f"/reports/{urllib.parse.quote(report_id, safe='')}/feishu:dispatch?{query}",
+            # Feishu token acquisition and message delivery can legitimately
+            # exceed the ordinary local API timeout. The server-side outbox
+            # remains idempotent if this longer request is interrupted.
+            timeout_seconds=max(self.timeout_seconds, 60.0),
+        )
 
     def complete_run(self, run_id: int, *, with_limits: bool = False) -> dict[str, Any]:
         return self._request("POST", f"/runs/{run_id}/complete", {"with_limits": with_limits}, idempotency_key=f"complete:{run_id}")

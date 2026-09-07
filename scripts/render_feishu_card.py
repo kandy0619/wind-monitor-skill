@@ -262,17 +262,32 @@ def build_intraday_card(current: dict[str, Any], previous: dict[str, Any] | None
             name = terminal_industry(str(row[0]))
             net = float(row[3]) if row[3] is not None else None
             stocks = row[4] or []
+            leader_values = []
+            for stock in stocks[:3]:
+                if isinstance(stock, dict):
+                    leader_values.append((
+                        str(stock.get("name") or "Wind未返回"),
+                        stock.get("main_net_inflow_yi", stock.get("main", stock.get("net"))),
+                        stock.get("change_pct", stock.get("change")),
+                    ))
+                else:
+                    has_code = len(stock) > 1 and isinstance(stock[1], str) and "." in stock[1]
+                    leader_values.append((
+                        str(stock[0]),
+                        stock[2 if has_code else 1] if len(stock) > (2 if has_code else 1) else None,
+                        stock[3 if has_code else 2] if len(stock) > (3 if has_code else 2) else None,
+                    ))
             rendered.append({
                 "rank": str(rank),
                 "industry": name,
                 "net": industry_amount(net),
                 "stocks": "\n".join(
                     stock_text(
-                        str(stock[0]),
-                        float(stock[1]) if stock[1] is not None else None,
-                        float(stock[2]) if stock[2] is not None else None,
+                        name,
+                        float(amount) if amount is not None else None,
+                        float(change_pct) if change_pct is not None else None,
                     )
-                    for stock in stocks[:3]
+                    for name, amount, change_pct in leader_values
                 ) or "Wind未返回",
             })
         return rendered

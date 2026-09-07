@@ -78,7 +78,8 @@ def validate_report(payload: dict[str, Any]) -> None:
         raise ContractError("unsupported report_type")
 
 
-def _iso(value: Any, fallback_date: str | None = None) -> str | None:
+def normalize_wind_time(value: Any, fallback_date: str | None = None) -> str | None:
+    """Normalize legacy Wind time labels into a database-safe ISO timestamp."""
     if value is None:
         return None
     text = str(value).strip().replace(" ", "T", 1)
@@ -97,6 +98,9 @@ def _iso(value: Any, fallback_date: str | None = None) -> str | None:
             second = prefix.group(4) or "00"
             return f"{prefix.group(1)}T{int(prefix.group(2)):02d}:{prefix.group(3)}:{second}"
         raise
+
+
+_iso = normalize_wind_time
 
 
 def _yi_to_yuan(value: Any) -> str | None:

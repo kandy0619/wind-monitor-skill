@@ -72,3 +72,19 @@ def test_flat_legacy_samples_are_grouped_by_slot():
     assert records[0].planned_time == "10:00"
     assert len(records[0].facts["observations"]) == 2
     assert records[0].facts["observations"][1]["main_net_inflow_yuan"] == "200000000"
+
+
+def test_import_normalizes_legacy_wind_time_range_for_mysql():
+    record = type("Record", (), {
+        "trade_date": "2026-08-12",
+        "planned_time": "10:30",
+        "mode": "intraday",
+        "report_type": "intraday",
+        "wind_data_time": "2026-08-12 10:32—10:33",
+        "source_name": "20260812-1030.json",
+        "facts": {"observations": [], "rankings": []},
+    })()
+    client = FakeClient()
+    import_records(client, 3, [record])
+    facts_call = next(call for call in client.calls if call[0] == "facts")
+    assert facts_call[2]["wind_data_time"] == "2026-08-12T10:32:00"

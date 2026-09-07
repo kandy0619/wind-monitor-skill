@@ -85,7 +85,8 @@ def test_delivery_failure_never_marks_run_complete():
             pass
         else:
             raise AssertionError("delivery failure must propagate")
-    assert [call[0] for call in client.calls] == ["facts", "report", "card", "dispatch"]
+    assert [call[0] for call in client.calls] == ["facts", "report", "card", "dispatch", "fail"]
+    assert client.calls[-1][2:4] == ("send", "feishu_dispatch_failed")
 
 
 def test_fact_conversion_uses_normalized_values():

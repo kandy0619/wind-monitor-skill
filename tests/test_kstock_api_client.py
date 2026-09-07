@@ -70,3 +70,16 @@ def test_client_rejects_incompatible_contract(monkeypatch):
     with pytest.raises(KStockAPIError) as caught:
         KStockClient("http://127.0.0.1").capabilities()
     assert caught.value.retryable is False
+
+
+def test_feishu_dispatch_uses_delivery_specific_timeout(monkeypatch):
+    observed = []
+
+    def fake_urlopen(_request, timeout):
+        observed.append(timeout)
+        return FakeResponse({"success": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = KStockClient("http://127.0.0.1", timeout_seconds=20)
+    assert client.dispatch_feishu("report-1")["success"] is True
+    assert observed == [60.0]

@@ -27,6 +27,7 @@ try:
         extract_close_facts,
         extract_intraday_facts,
         extract_trend_sample_facts,
+        normalize_wind_time,
     )
 except ModuleNotFoundError:
     import sys
@@ -35,6 +36,7 @@ except ModuleNotFoundError:
         extract_close_facts,
         extract_intraday_facts,
         extract_trend_sample_facts,
+        normalize_wind_time,
     )
 
 
@@ -180,7 +182,7 @@ def import_records(client: KStockClient, task_id: int, records: Iterable[LegacyR
             "adapter_version": "legacy-normalized-v1",
         })
         committed = client.commit_facts(run_id, {
-            "wind_data_time": record.wind_data_time,
+            "wind_data_time": normalize_wind_time(record.wind_data_time, record.trade_date),
             "quality_status": "raw_missing",
             "observations": record.facts["observations"],
             "rankings": record.facts["rankings"],

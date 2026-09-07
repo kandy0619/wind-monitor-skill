@@ -104,8 +104,13 @@ def persist_and_deliver(
     )
     if not dispatch:
         return {"success": True, "report_id": report_id, "status": "pending_send"}
-    sent = client.dispatch_feishu(report_id, 0)
+    try:
+        sent = client.dispatch_feishu(report_id, 0)
+    except KStockAPIError as error:
+        client.mark_failure(run_id, "send", "feishu_dispatch_uncertain", str(error))
+        raise
     if not sent.get("success"):
+        client.mark_failure(run_id, "send", "feishu_dispatch_failed", "飞书卡片发送失败")
         raise KStockAPIError(None, "飞书卡片发送失败，已保留持久化数据等待重试", retryable=True)
     completed = client.complete_run(run_id, with_limits=bundle.get("with_limits", False))
     return {
@@ -141,8 +146,13 @@ def resume_report(client: KStockClient, run_id: int) -> dict[str, Any]:
             report_id, card,
             recipient_config_version=context["recipient_config_version"], part_index=0,
         )
-    sent = client.dispatch_feishu(report_id, 0)
+    try:
+        sent = client.dispatch_feishu(report_id, 0)
+    except KStockAPIError as error:
+        client.mark_failure(run_id, "send", "feishu_dispatch_uncertain", str(error))
+        raise
     if not sent.get("success"):
+        client.mark_failure(run_id, "send", "feishu_dispatch_failed", "飞书卡片发送失败")
         raise KStockAPIError(None, "飞书卡片发送失败，已保留持久化数据等待重试", retryable=True)
     completed = client.complete_run(run_id, with_limits=report.get("quality_status") != "complete")
     return {

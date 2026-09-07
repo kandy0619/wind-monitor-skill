@@ -68,7 +68,7 @@ PROFILES = {
         (
             FieldSpec("code", ("wind代码", "windcode", "证券代码", "股票代码", "代码")),
             FieldSpec("name", ("中文简称", "证券简称", "股票简称", "简称", "名称")),
-            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期")),
+            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期"), "date"),
             FieldSpec("data_time", ("交易时间", "数据时间", "更新时间", "时间")),
             FieldSpec("change_pct", ("涨跌幅", "当日涨跌幅"), "number"),
             FieldSpec("main_yuan", ("当日主力净流入额", "主力净流入额", "主力资金净流入", "主力净额"), "amount"),
@@ -84,7 +84,7 @@ PROFILES = {
         (
             FieldSpec("code", ("wind代码", "windcode", "指数代码", "证券代码", "代码")),
             FieldSpec("name", ("中文简称", "指数简称", "简称", "名称")),
-            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期")),
+            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期"), "date"),
             FieldSpec("data_time", ("交易时间", "数据时间", "更新时间", "时间")),
             FieldSpec("main_yuan", ("当日主力净流入额", "主力净流入额", "主力资金净流入", "主力净额"), "amount"),
             FieldSpec("main_ratio_pct", ("当日主力净流入占比", "主力净流入占比", "主力占比"), "number", False),
@@ -93,32 +93,38 @@ PROFILES = {
     "industry_summary": Profile(
         "industry_summary",
         (
-            FieldSpec("industry", ("wind行业完整名称", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("gross_inflow_yuan", ("主力资金流入额", "主力流入额", "资金流入额", "流入额", "inflow", "in"), "amount", False),
             FieldSpec("gross_outflow_yuan", ("主力资金流出额", "主力流出额", "资金流出额", "流出额", "outflow", "out"), "amount", False),
             FieldSpec("net_yuan", ("主力净流入额", "主力资金净流入", "资金净流入额", "净流入额", "净额", "net"), "amount"),
             FieldSpec("rank", ("排名", "名次", "rank"), "integer", False),
         ),
-        max_rows=5,
+        # A1/A2 intraday industry contracts operate on the combined inflow and
+        # outflow lists (5 + 5 rows).  Per-side validation is performed by the
+        # workflow after adaptation.
+        max_rows=10,
     ),
     "industry_daily_full": Profile(
         "industry_daily_full",
         (
-            FieldSpec("industry", ("wind行业完整名称", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("net_yuan", ("主力净流入额", "主力资金净流入", "资金净流入额", "净流入额", "净额", "net"), "amount"),
         ),
     ),
     "industry_stock": Profile(
         "industry_stock",
         (
-            FieldSpec("industry", ("wind行业完整名称", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("code", ("wind代码", "windcode", "证券代码", "股票代码", "代码")),
             FieldSpec("name", ("中文简称", "证券简称", "股票简称", "简称", "名称")),
             FieldSpec("main_yuan", ("当日主力净流入额", "主力净流入额", "主力资金净流入", "净流入额", "净额"), "amount"),
             FieldSpec("change_pct", ("涨跌幅", "当日涨跌幅"), "number"),
             FieldSpec("rank", ("排名", "名次", "rank"), "integer", False),
         ),
-        max_rows=3,
+        # The preferred stage-B request contains up to ten industries, each
+        # capped at three stocks.  Per-industry limits are enforced by the
+        # workflow after adaptation.
+        max_rows=30,
     ),
     "board_candidate": Profile(
         "board_candidate",
@@ -126,7 +132,7 @@ PROFILES = {
             FieldSpec("board", ("上市板块", "来源板块", "板块"), required=False),
             FieldSpec("code", ("wind代码", "windcode", "证券代码", "股票代码", "代码")),
             FieldSpec("name", ("中文简称", "证券简称", "股票简称", "简称", "名称")),
-            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期")),
+            FieldSpec("trade_date", ("最新交易日", "交易日期", "交易日", "日期"), "date"),
             FieldSpec("data_time", ("交易时间", "数据时间", "更新时间", "时间")),
             FieldSpec("main_yuan", ("当日主力净流入额", "主力净流入额", "主力资金净流入", "净流入额"), "amount"),
             FieldSpec("change_pct", ("涨跌幅", "当日涨跌幅"), "number"),
@@ -281,6 +287,9 @@ def discover_records(raw: Any) -> tuple[list[dict[str, Any]], dict[str, str]]:
     columns = value.get("columns") or value.get("fields")
     rows = value.get("rows") or value.get("values")
     if isinstance(columns, list) and isinstance(rows, list):
+        table_units = value.get("unit") or value.get("units")
+        if isinstance(table_units, dict):
+            units.update({str(name): str(unit) for name, unit in table_units.items() if unit})
         names = []
         for column in columns:
             if isinstance(column, dict):
@@ -379,6 +388,15 @@ def _number(value: Any, *, integer: bool = False) -> float | int | None:
 def _convert(value: Any, spec: FieldSpec, source_key: str, units: dict[str, str]) -> Any:
     if spec.kind == "text":
         return None if value is None else str(value)
+    if spec.kind == "date":
+        if value is None or value == "":
+            return None
+        text = str(value).strip()
+        if re.fullmatch(r"\d{8}", text):
+            return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return text
+        raise AdaptationError("type_mismatch", f"cannot parse Wind trade date: {value}")
     if spec.kind == "integer":
         return _number(value, integer=True)
     number = _number(value)
