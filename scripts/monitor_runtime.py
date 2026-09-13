@@ -298,6 +298,12 @@ def main() -> None:
             from kstock_api_client import KStockClient
         except ModuleNotFoundError:
             from scripts.kstock_api_client import KStockClient
+        # Independent paper-data extension; existing monitor reporting continues.
+        try:
+            from wind_quant_bridge import start_quant_worker
+            quant_extension = start_quant_worker(now, args.project_root)
+        except Exception as error:
+            quant_extension = {"status": "bridge_failed", "error_type": type(error).__name__}
         client = KStockClient.from_environment(args.project_root)
         client.capabilities()
         context = client.context()
@@ -305,6 +311,7 @@ def main() -> None:
         result = plan_poll(now, manifest_from_runs(trade_date, runs))
         result.update({
             "storage_backend": "kstock",
+            "wind_quant": quant_extension,
             "task_id": context["task_id"],
             "task_name": context["task_name"],
             "recipient_config_version": context["recipient_config_version"],

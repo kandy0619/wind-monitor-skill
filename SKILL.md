@@ -126,3 +126,8 @@ npx skills add https://gitee.com/wind_info/wind-skills.git --skill wind-mcp-skil
 自动化提示词应要求调用 `$wind-monitor-skill` 并以本技能和参考规格为唯一业务口径，同时明确“触发后不受执行宽限限制，未完成档进入 `pending` 并持续重试至飞书发送成功”；自动化只需保留运行时间、必要静默规则、技能调用入口和“按技能定义执行双渠道交付”，避免复制两份会漂移的长规格或要求两个渠道发送相同内容。
 
 KStock原生融合的目标架构、数据表、迁移阶段和研究接口保存在 [references/kstock-integration-plan.md](references/kstock-integration-plan.md)。实施KStock融合前先读取该方案；业务规则和可移植实现仍以本Skill仓库为单一来源。
+
+
+## KStock D-14:55 / E 模拟盘数据扩展
+
+维护或执行D/E时读取 [策略数据扩展](references/wind-quant-strategies.md)。D/E绑定KStock原模拟账户，配置、买卖记账和交易任务复用原服务。KStock负责开盘卖出与14:55买入调度，Agent通过现有poll协同采集并使用数据库租约去重。D默认按14:55新卖一价和预留预算买入，不受准备限价限制；14:56截止。量化选股、成交、执行结果和收盘持仓通知由KStock发出，Agent不重复发送。

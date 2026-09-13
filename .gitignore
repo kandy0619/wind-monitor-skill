@@ -1,2 +1,4 @@
 ﻿__pycache__/
 *.py[cod]
+references/wind-quant-local.json
+scripts/monitor_runtime.before-wind-quant.py
