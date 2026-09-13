@@ -79,6 +79,20 @@ class WindResponseAdapterTest(unittest.TestCase):
         result = adapter.adapt_response(raw, "industry_stock")
         self.assertEqual(len(result.records), 30)
 
+    def test_industry_stock_adapter_accepts_extra_rows_for_exact_workflow_filtering(self):
+        raw = [
+            {
+                "Wind行业完整名称": f"行业{index // 3}",
+                "Wind代码": f"{index:06d}.SZ",
+                "证券简称": f"股票{index}",
+                "当日主力净流入额(亿元)": 40 - index,
+                "涨跌幅": index / 10,
+            }
+            for index in range(33)
+        ]
+        result = adapter.adapt_response(raw, "industry_stock")
+        self.assertEqual(len(result.records), 33)
+
     def test_industry_stock_maps_current_wind_industry_detail_column(self):
         raw = [{
             "Wind代码": "688256.SH",
@@ -86,6 +100,18 @@ class WindResponseAdapterTest(unittest.TestCase):
             "所属WIND行业明细": "信息技术--半导体产品",
             "2026年9月4日主力净流入额(百万元)": 220.1464,
             "2026年9月4日涨跌幅(%)": -2.5446,
+        }]
+        result = adapter.adapt_response(raw, "industry_stock")
+        self.assertEqual(result.records[0]["industry"], "信息技术--半导体产品")
+        self.assertEqual(result.records[0]["main_yuan"], 220_146_400)
+
+    def test_industry_stock_maps_wind_industry_detail_without_prefix(self):
+        raw = [{
+            "Wind代码": "688256.SH",
+            "证券简称": "寒武纪",
+            "WIND行业明细": "信息技术--半导体产品",
+            "2026年9月7日主力净流入额(百万元)": 220.1464,
+            "2026年9月7日涨跌幅(%)": -2.5446,
         }]
         result = adapter.adapt_response(raw, "industry_stock")
         self.assertEqual(result.records[0]["industry"], "信息技术--半导体产品")

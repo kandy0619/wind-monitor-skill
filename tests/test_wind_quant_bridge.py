@@ -23,7 +23,7 @@ class BridgeTest(unittest.TestCase):
 
     def test_target_project_environment_and_interpreter(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp)
+            root=Path(temp).resolve()
             command=root/'backend/scripts/wind_quant_agent.py'
             command.parent.mkdir(parents=True);command.touch()
             python=root/('.venv/Scripts/python.exe' if os.name=='nt' else '.venv/bin/python')

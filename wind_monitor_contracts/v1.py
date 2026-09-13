@@ -249,12 +249,24 @@ def extract_close_facts(payload: dict[str, Any]) -> dict[str, list[dict[str, Any
     wind_time = _iso(payload.get("wind_data_time"), trade_date)
     observations: list[dict[str, Any]] = []
     rankings: list[dict[str, Any]] = []
-    for fallback_rank, item in enumerate(payload.get("top10", []), 1):
+    for fallback_rank, raw_item in enumerate(payload.get("top10", []), 1):
+        if isinstance(raw_item, dict):
+            item = raw_item
+        else:
+            item = {
+                "rank": raw_item[0], "code": raw_item[1], "name": raw_item[2],
+                "board": raw_item[3], "board_rank": raw_item[4], "industry": raw_item[5],
+                "change_pct": raw_item[6], "main_net_inflow_yi": raw_item[7],
+                "main_ratio_pct": raw_item[8], "trend": raw_item[9],
+            }
         code = _first(item, "code", "wind_code")
         industry = _first(item, "industry", "wind_industry")
         sources = item.get("sources")
-        source_board = (sources or [None])[0] if isinstance(sources, list) else item.get("source_board")
+        source_board = (sources or [None])[0] if isinstance(sources, list) else _first(item, "source_board", "board")
         main_ratio = _first(item, "main_ratio_pct", "main_inflow_ratio_pct")
+        main_yi = item.get("main_net_inflow_yi")
+        if main_yi is None and item.get("main_yuan") is not None:
+            main_yi = Decimal(str(item["main_yuan"])) / Decimal("100000000")
         valid_sample_count = item.get("valid_sample_count")
         if valid_sample_count is None and isinstance(item.get("trend_samples"), list):
             valid_sample_count = len(item["trend_samples"])
@@ -269,7 +281,7 @@ def extract_close_facts(payload: dict[str, Any]) -> dict[str, list[dict[str, Any
             "trade_date": trade_date,
             "planned_time": planned_time,
             "wind_data_time": wind_time,
-            "main_net_inflow_yuan": _yi_to_yuan(item.get("main_net_inflow_yi")),
+            "main_net_inflow_yuan": _yi_to_yuan(main_yi),
             "change_pct": item.get("change_pct"),
             "main_ratio_pct": main_ratio,
         })
@@ -281,7 +293,7 @@ def extract_close_facts(payload: dict[str, Any]) -> dict[str, list[dict[str, Any
             "entity_code": code,
             "entity_name": item["name"],
             "source_board": source_board,
-            "metric_value": _yi_to_yuan(item.get("main_net_inflow_yi")),
+            "metric_value": _yi_to_yuan(main_yi),
             "decision_label": item.get("decision_label"),
             "decision_rule_version": item.get("decision_rule_version"),
             "extra": {
@@ -308,12 +320,27 @@ def extract_trend_sample_facts(trade_date: str, sample: dict[str, Any]) -> dict[
             })
     else:
         for board, value in (sample.get("boards") or {}).items():
-            for item in value.get("stocks", []):
-                rows.append({
-                    "board": board, "rank": item[0], "code": item[1], "name": item[2],
-                    "industry": None, "main_yi": item[3], "change_pct": item[4],
-                    "main_ratio_pct": item[5], "wind_time": wind_time,
-                })
+            items = value.get("stocks", []) if isinstance(value, dict) else value
+            for item in items or []:
+                if isinstance(item, dict):
+                    main_yi = _first(item, "main_net_raw", "main_net_inflow_raw")
+                    if main_yi is None and item.get("main_yuan") is not None:
+                        main_yi = Decimal(str(item["main_yuan"])) / Decimal("100000000")
+                    rows.append({
+                        "board": board, "rank": _first(item, "rank", "board_rank"),
+                        "code": _first(item, "code", "wind_code", "windcode"),
+                        "name": item.get("name"),
+                        "industry": _first(item, "industry", "wind_industry"),
+                        "main_yi": main_yi, "change_pct": item.get("change_pct"),
+                        "main_ratio_pct": _first(item, "main_ratio_pct", "main_inflow_ratio"),
+                        "wind_time": item.get("wind_time") or wind_time,
+                    })
+                else:
+                    rows.append({
+                        "board": board, "rank": item[0], "code": item[1], "name": item[2],
+                        "industry": None, "main_yi": item[3], "change_pct": item[4],
+                        "main_ratio_pct": item[5], "wind_time": wind_time,
+                    })
     observations = [{
         "query_profile": "board_candidate",
         "entity_type": "stock",

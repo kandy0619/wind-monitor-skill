@@ -93,7 +93,7 @@ PROFILES = {
     "industry_summary": Profile(
         "industry_summary",
         (
-            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("gross_inflow_yuan", ("主力资金流入额", "主力流入额", "资金流入额", "流入额", "inflow", "in"), "amount", False),
             FieldSpec("gross_outflow_yuan", ("主力资金流出额", "主力流出额", "资金流出额", "流出额", "outflow", "out"), "amount", False),
             FieldSpec("net_yuan", ("主力净流入额", "主力资金净流入", "资金净流入额", "净流入额", "净额", "net"), "amount"),
@@ -107,24 +107,25 @@ PROFILES = {
     "industry_daily_full": Profile(
         "industry_daily_full",
         (
-            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("net_yuan", ("主力净流入额", "主力资金净流入", "资金净流入额", "净流入额", "净额", "net"), "amount"),
         ),
     ),
     "industry_stock": Profile(
         "industry_stock",
         (
-            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业", "行业名称", "行业")),
+            FieldSpec("industry", ("wind行业完整名称", "所属wind行业明细", "wind行业明细", "wind行业", "行业名称", "行业")),
             FieldSpec("code", ("wind代码", "windcode", "证券代码", "股票代码", "代码")),
             FieldSpec("name", ("中文简称", "证券简称", "股票简称", "简称", "名称")),
             FieldSpec("main_yuan", ("当日主力净流入额", "主力净流入额", "主力资金净流入", "净流入额", "净额"), "amount"),
             FieldSpec("change_pct", ("涨跌幅", "当日涨跌幅"), "number"),
             FieldSpec("rank", ("排名", "名次", "rank"), "integer", False),
         ),
-        # The preferred stage-B request contains up to ten industries, each
-        # capped at three stocks.  Per-industry limits are enforced by the
-        # workflow after adaptation.
-        max_rows=30,
+        # Wind can return extra parent/sibling rows even when the requested
+        # ten leaves are capped at three.  Accept the envelope here; the
+        # workflow performs exact full-path filtering, deduplication and the
+        # per-industry Top 3 cap before any value is used.
+        max_rows=99,
     ),
     "board_candidate": Profile(
         "board_candidate",

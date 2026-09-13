@@ -24,6 +24,7 @@ try:
         build_scoped_stock_question,
         exact_batch_industry_stocks,
         merge_industry_amounts,
+        scoped_industry_amount,
         scoped_industry_stocks,
     )
     from intraday_report import build_intraday_markdown
@@ -37,6 +38,7 @@ except ModuleNotFoundError:
         build_scoped_stock_question,
         exact_batch_industry_stocks,
         merge_industry_amounts,
+        scoped_industry_amount,
         scoped_industry_stocks,
     )
     from scripts.intraday_report import build_intraday_markdown
@@ -110,6 +112,8 @@ class IntradayRunner:
         self.run_id = 0
         self.context: dict[str, Any] = {}
         self.call_index = 0
+        self.limitations: list[str] = []
+        self.request_template_version = "intraday-v2"
 
     def claim(self) -> dict[str, Any]:
         self.client.capabilities()
@@ -167,7 +171,7 @@ class IntradayRunner:
             "request_kind": tool_name,
             "attempt_no": attempt_no,
             "request_contract": contract,
-            "request_template_version": "intraday-v2",
+            "request_template_version": self.request_template_version,
             "raw_response": raw,
             "response_hash": response_hash(raw),
             "response_metadata": {"called_at": datetime.now(SHANGHAI).isoformat()},
@@ -187,6 +191,27 @@ class IntradayRunner:
             raise
         return normalized, raw
 
+    def required_query(
+        self,
+        query_profile: str,
+        server_type: str,
+        tool_name: str,
+        params: dict[str, Any],
+        adapter_profile: str,
+    ):
+        """Retry a required Wind query at most three times."""
+        last_error: Exception | None = None
+        for attempt_no in range(1, 4):
+            try:
+                return self.query(
+                    query_profile, server_type, tool_name, params,
+                    adapter_profile, attempt_no,
+                )
+            except (WindCliError, AdaptationError) as error:
+                last_error = error
+        assert last_error is not None
+        raise last_error
+
     def _industry_a1(self):
         call_time = datetime.now(SHANGHAI).isoformat()
         question = (
@@ -195,7 +220,10 @@ class IntradayRunner:
             "每个行业唯一一行，只返回Wind行业完整名称和主力净流入额，不返回证券简称或Wind代码。"
             f"本次计划档位{self.planned_time}，唯一调用时刻{call_time}，按调用时可得累计值实时重新计算，禁止复用其它响应。"
         )
-        result, raw = self.query("industry_a1", "analytics_data", "get_financial_data", {"question": question}, "industry_summary")
+        result, raw = self.required_query(
+            "industry_a1", "analytics_data", "get_financial_data",
+            {"question": question}, "industry_summary",
+        )
         if not _contains_trade_date(raw, self.trade_date):
             raise ValueError("industry_a1_trade_date_unverified")
         records = result.records
@@ -210,17 +238,26 @@ class IntradayRunner:
     def _complete_amounts(self, a1_records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         amounts, missing = merge_industry_amounts(a1_records)
         for full_name in missing:
-            question = build_scoped_amount_question(full_name, self.trade_date)
-            result, raw = self.query(
-                "industry_a2_scoped", "analytics_data", "get_financial_data",
-                {"question": question}, "industry_summary",
-            )
-            if not _contains_trade_date(raw, self.trade_date):
-                raise ValueError("industry_a2_trade_date_unverified")
-            exact = [row for row in result.records if row.get("industry") == full_name]
-            amounts, remaining = merge_industry_amounts(amounts.values(), exact)
-            if full_name in remaining:
-                raise ValueError(f"industry_amount_incomplete:{full_name}")
+            last_error: Exception | None = None
+            for attempt_no in range(1, 4):
+                question = build_scoped_amount_question(full_name, self.trade_date)
+                try:
+                    result, raw = self.query(
+                        "industry_a2_scoped", "analytics_data", "get_financial_data",
+                        {"question": question}, "industry_summary", attempt_no,
+                    )
+                    if not _contains_trade_date(raw, self.trade_date):
+                        raise ValueError("industry_a2_trade_date_unverified")
+                    scoped = scoped_industry_amount(full_name, result.records)
+                    amounts, remaining = merge_industry_amounts(amounts.values(), [scoped] if scoped else [])
+                    if full_name not in remaining:
+                        last_error = None
+                        break
+                    last_error = ValueError(f"industry_amount_incomplete:{full_name}")
+                except (WindCliError, AdaptationError, ValueError) as error:
+                    last_error = error
+            if last_error is not None:
+                self.limitations.append(full_name)
         return amounts
 
     def _complete_industry_stocks(self, industry_names: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -231,7 +268,10 @@ class IntradayRunner:
             "每只股票唯一一行，返回Wind行业完整名称、行业内排名、证券简称、Wind代码、主力净流入额和涨跌幅。"
             f"本次计划档位{self.planned_time}，唯一调用时刻{call_time}，禁止复用其它响应。"
         )
-        batch, raw = self.query("industry_b_batch", "analytics_data", "get_financial_data", {"question": question}, "industry_stock")
+        batch, raw = self.required_query(
+            "industry_b_batch", "analytics_data", "get_financial_data",
+            {"question": question}, "industry_stock",
+        )
         if not _contains_trade_date(raw, self.trade_date):
             raise ValueError("industry_b_trade_date_unverified")
         grouped, missing = exact_batch_industry_stocks(industry_names, batch.records)
@@ -243,10 +283,13 @@ class IntradayRunner:
                     f" 本次计划档位{self.planned_time}，唯一调用时刻{datetime.now(SHANGHAI).isoformat()}，"
                     "按调用时可得累计值实时重新计算，禁止复用其它响应。"
                 )
-                result, scoped_raw = self.query(
-                    "industry_b_scoped", "stock_data", "search_stocks",
-                    {"question": scoped_question}, "industry_stock", attempt_no,
-                )
+                try:
+                    result, scoped_raw = self.query(
+                        "industry_b_scoped", "stock_data", "search_stocks",
+                        {"question": scoped_question}, "industry_stock", attempt_no,
+                    )
+                except (WindCliError, AdaptationError):
+                    continue
                 if not _contains_trade_date(scoped_raw, self.trade_date):
                     raise ValueError("industry_b_scoped_trade_date_unverified")
                 accepted = scoped_industry_stocks(full_name, result.records)
@@ -261,11 +304,11 @@ class IntradayRunner:
         claim = self.claim()
         if claim["run"].get("status") in {"completed", "completed_with_limits"}:
             return {"status": claim["run"]["status"], "reused": True}
-        stock_result, _ = self.query(
+        stock_result, _ = self.required_query(
             "intraday_stock", "stock_data", "get_stock_price_indicators",
             {"windcode": ",".join(STOCK_CODES), "indexes": STOCK_FIELDS}, "stock",
         )
-        index_result, _ = self.query(
+        index_result, _ = self.required_query(
             "intraday_index", "index_data", "get_index_price_indicators",
             {"windcode": ",".join(code for _, code in INDEXES), "indexes": INDEX_FIELDS}, "index",
         )
@@ -313,6 +356,12 @@ class IntradayRunner:
             )
             previous = previous_report.get("normalized_payload") if previous_report else None
         apply_comparison_deltas(current, previous)
+        if self.limitations:
+            current["quality_status"] = "partial"
+            current["data_warning"] = (
+                "部分行业主力流入/流出额经3次Wind补查仍未返回；净额、排名和个股Top 3不受影响，"
+                "审计表缺失字段标注Wind未返回：" + "；".join(self.limitations)
+            )
         for source, key in ((a1[:5], "industry_inflow_top5"), (a1[5:], "industry_outflow_top5")):
             for item in source:
                 amount = amounts[item["industry"]]
@@ -334,12 +383,12 @@ class IntradayRunner:
                 "index_total_yuan": current["index_total_yuan"],
                 "period_delta_yuan": None,
                 "baseline_delta_yuan": None,
-                "all_required_data_complete": True,
+                "all_required_data_complete": not self.limitations,
             },
             "concise_markdown": concise,
             "audit_markdown": audit,
             "recipient_config_version": self.context["recipient_config_version"],
-            "with_limits": False,
+            "with_limits": bool(self.limitations),
             "previous_successful_payload": previous,
         }, dispatch=dispatch)
         return {

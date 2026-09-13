@@ -74,6 +74,28 @@ def merge_industry_amounts(
     return base, missing
 
 
+def scoped_industry_amount(
+    full_name: str, records: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Accept an explicitly scoped amount response for the exact leaf only.
+
+    A scoped Wind query can return the requested leaf label instead of its
+    full hierarchy path.  The query itself pins the hierarchy level, so the
+    exact leaf is safe to canonicalize.  Parent and sibling labels remain
+    rejected.
+    """
+    leaf = industry_leaf(full_name)
+    accepted = [
+        dict(row) for row in records
+        if str(row.get("industry") or "").strip() in {full_name, leaf}
+    ]
+    if len(accepted) != 1:
+        return None
+    accepted[0]["returned_industry"] = accepted[0].get("industry")
+    accepted[0]["industry"] = full_name
+    return accepted[0]
+
+
 def exact_batch_industry_stocks(
     industry_names: Iterable[str],
     records: Iterable[dict[str, Any]],

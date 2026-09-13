@@ -4,6 +4,7 @@ from scripts.industry_pipeline import (
     industry_leaf,
     industry_level,
     merge_industry_amounts,
+    scoped_industry_amount,
     scoped_industry_stocks,
 )
 
@@ -38,6 +39,22 @@ def test_shortened_or_parent_a2_amount_is_never_applied_to_leaf():
     )
     assert missing == [FULL]
     assert merged[FULL]["gross_inflow_yuan"] is None
+
+
+def test_scoped_amount_accepts_exact_leaf_but_rejects_parent_or_sibling():
+    accepted = scoped_industry_amount(FULL, [{
+        "industry": "半导体产品", "gross_inflow_yuan": 12,
+        "gross_outflow_yuan": 7, "net_yuan": 5,
+    }])
+    assert accepted is not None
+    assert accepted["industry"] == FULL
+    assert accepted["returned_industry"] == "半导体产品"
+    assert scoped_industry_amount(FULL, [{
+        "industry": "半导体产品与半导体设备", "gross_inflow_yuan": 99,
+    }]) is None
+    assert scoped_industry_amount(FULL, [{
+        "industry": "半导体设备", "gross_inflow_yuan": 99,
+    }]) is None
 
 
 def test_batch_drops_parent_rows_and_scoped_result_accepts_only_target_leaf():

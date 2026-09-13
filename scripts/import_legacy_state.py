@@ -63,8 +63,16 @@ def _read_object(path: Path) -> dict[str, Any]:
     return value
 
 
+def _normalize_trade_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"\d{8}", text):
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text
+
+
 def discover_records(state_root: Path) -> list[LegacyRecord]:
     records: list[LegacyRecord] = []
+    known_intraday: set[tuple[str, str]] = set()
     normalized_root = state_root / "a-share-monitor-normalized"
     if normalized_root.is_dir():
         for path in sorted(normalized_root.glob("*.json")):
@@ -75,22 +83,62 @@ def discover_records(state_root: Path) -> list[LegacyRecord]:
             planned_time = payload.get("planned_time") or f"{match.group(2)[:2]}:{match.group(2)[2:]}"
             if planned_time == "15:10" or "stocks" not in payload:
                 continue
+            trade_date = _normalize_trade_date(payload["trade_date"])
             records.append(LegacyRecord(
-                trade_date=payload["trade_date"], planned_time=planned_time,
+                trade_date=trade_date, planned_time=planned_time,
                 mode="intraday", report_type="intraday",
                 wind_data_time=payload.get("wind_data_time"), payload=payload,
                 facts=extract_intraday_facts(payload), source_name=path.name,
             ))
+            known_intraday.add((trade_date, planned_time))
+
+    # Current legacy state stores the normalized intraday card input under the
+    # per-slot work directory instead of a single normalized-state directory.
+    work_root = state_root / "a-share-monitor-work"
+    if work_root.is_dir():
+        for date_dir in sorted(path for path in work_root.iterdir() if path.is_dir()):
+            trade_date = _normalize_trade_date(date_dir.name)
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", trade_date):
+                continue
+            for slot_dir in sorted(path for path in date_dir.iterdir() if path.is_dir()):
+                path = slot_dir / "intraday-card-input.json"
+                if not path.is_file():
+                    continue
+                payload = _read_object(path)
+                if payload.get("report_type") != "intraday" or "stocks" not in payload:
+                    continue
+                planned_time = payload.get("planned_time") or (
+                    f"{slot_dir.name[:2]}:{slot_dir.name[2:]}" if re.fullmatch(r"\d{4}", slot_dir.name) else None
+                )
+                if not planned_time or (trade_date, planned_time) in known_intraday:
+                    continue
+                normalized_payload = dict(payload)
+                normalized_payload["trade_date"] = trade_date
+                records.append(LegacyRecord(
+                    trade_date=trade_date, planned_time=planned_time,
+                    mode="intraday", report_type="intraday",
+                    wind_data_time=payload.get("wind_data_time"), payload=normalized_payload,
+                    facts=extract_intraday_facts(normalized_payload),
+                    source_name=str(path.relative_to(state_root)),
+                ))
+                known_intraday.add((trade_date, planned_time))
 
     samples_root = state_root / "a-share-close-main-add-samples"
     if samples_root.is_dir():
         for path in sorted(samples_root.glob("*.json")):
             payload = _read_object(path)
-            trade_date = payload["trade_date"]
+            trade_date = _normalize_trade_date(payload["trade_date"])
             rich_samples = []
             flat_groups: dict[str, dict[str, Any]] = {}
-            for sample in payload.get("samples", []):
-                code = sample.get("windcode") or sample.get("wind_code")
+            samples_value = payload.get("samples", [])
+            if isinstance(samples_value, dict):
+                source_samples = [sample for sample in samples_value.values() if isinstance(sample, dict)]
+            elif isinstance(samples_value, list):
+                source_samples = [sample for sample in samples_value if isinstance(sample, dict)]
+            else:
+                source_samples = []
+            for sample in source_samples:
+                code = sample.get("windcode") or sample.get("wind_code") or sample.get("code")
                 if not code:
                     rich_samples.append(sample)
                     continue
@@ -103,8 +151,14 @@ def discover_records(state_root: Path) -> list[LegacyRecord]:
                 })
                 raw_value = sample.get("main_net_raw")
                 if raw_value is None:
+                    raw_value = sample.get("main_net_inflow_raw")
+                if raw_value is None:
                     raw_value = sample.get("main_net_inflow_yuan")
-                unit = str(sample.get("main_net_unit") or sample.get("unit") or ("元" if "main_net_inflow_yuan" in sample else "亿元"))
+                if raw_value is None:
+                    raw_value = sample.get("main_yuan")
+                unit = str(sample.get("main_net_unit") or sample.get("unit") or (
+                    "元" if "main_net_inflow_yuan" in sample or "main_yuan" in sample else "亿元"
+                ))
                 if raw_value is None:
                     value_yi = None
                 elif unit == "元":
@@ -118,7 +172,7 @@ def discover_records(state_root: Path) -> list[LegacyRecord]:
                 grouped["stock_details"].append([
                     sample.get("board") or sample.get("source_board"),
                     sample.get("rank") or sample.get("board_rank"), code,
-                    sample.get("name"), sample.get("wind_industry"), value_yi,
+                    sample.get("name"), sample.get("wind_industry") or sample.get("industry"), value_yi,
                     sample.get("change_pct"), sample.get("main_ratio_pct", sample.get("main_inflow_ratio")),
                     sample.get("wind_time"),
                 ])
@@ -137,11 +191,14 @@ def discover_records(state_root: Path) -> list[LegacyRecord]:
             payload = _read_object(path)
             if not payload.get("top10"):
                 continue
+            trade_date = _normalize_trade_date(payload.get("trade_date") or path.name[:8])
+            normalized_payload = dict(payload)
+            normalized_payload["trade_date"] = trade_date
             records.append(LegacyRecord(
-                trade_date=payload["trade_date"], planned_time="15:10",
+                trade_date=trade_date, planned_time="15:10",
                 mode="close", report_type="close_summary",
-                wind_data_time=payload.get("wind_data_time"), payload=payload,
-                facts=extract_close_facts(payload), source_name=path.name,
+                wind_data_time=payload.get("wind_data_time"), payload=normalized_payload,
+                facts=extract_close_facts(normalized_payload), source_name=path.name,
             ))
     return sorted(records, key=lambda item: (item.trade_date, item.planned_time, item.mode))
 

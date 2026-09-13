@@ -74,6 +74,70 @@ def test_flat_legacy_samples_are_grouped_by_slot():
     assert records[0].facts["observations"][1]["main_net_inflow_yuan"] == "200000000"
 
 
+def test_current_flat_samples_accept_compact_date_code_and_raw_value():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        samples = root / "a-share-close-main-add-samples"
+        samples.mkdir()
+        (samples / "20260907.json").write_text(json.dumps({
+            "trade_date": "20260907",
+            "samples": [{
+                "planned_time": "13:00", "wind_time": "2026-09-07T13:00:01+08:00",
+                "source_board": "科创板", "board_rank": 1, "code": "688981.SH",
+                "name": "中芯国际", "industry": "半导体", "main_net_inflow_raw": 20,
+                "unit": "亿元", "main_yuan": 2_000_000_000, "change_pct": 1,
+                "main_ratio_pct": 2,
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+        records = discover_records(root)
+    assert len(records) == 1
+    assert records[0].trade_date == "2026-09-07"
+    assert records[0].facts["observations"][0]["entity_code"] == "688981.SH"
+    assert records[0].facts["observations"][0]["main_net_inflow_yuan"] == "2000000000"
+
+
+def test_current_work_directory_intraday_card_is_discovered():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        slot = root / "a-share-monitor-work" / "20260907" / "1500"
+        slot.mkdir(parents=True)
+        (slot / "intraday-card-input.json").write_text(json.dumps({
+            "report_type": "intraday", "planned_time": "15:00",
+            "wind_data_time": "2026-09-07T15:00:00+08:00",
+            "stocks": [["中芯国际", "688981.SH", 1, 100, 2, 1, 2, 3, 4]],
+            "indexes": [], "industry_inflow_top5": [], "industry_outflow_top5": [],
+        }, ensure_ascii=False), encoding="utf-8")
+        records = discover_records(root)
+    assert len(records) == 1
+    assert records[0].trade_date == "2026-09-07"
+    assert records[0].planned_time == "15:00"
+    assert records[0].mode == "intraday"
+    assert len(records[0].facts["observations"]) == 1
+
+
+def test_legacy_grouped_samples_accept_board_lists_of_objects():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        samples = root / "a-share-close-main-add-samples"
+        samples.mkdir()
+        (samples / "20260814.json").write_text(json.dumps({
+            "trade_date": "2026-08-14",
+            "samples": {"10:30": {
+                "planned_time": "10:30", "wind_time": "20260814 10:30:01",
+                "boards": {"科创板": [{
+                    "rank": 1, "code": "688981.SH", "name": "中芯国际",
+                    "industry": "半导体", "main_net_inflow_raw": 3,
+                    "change_pct": 1, "main_ratio_pct": 2,
+                    "wind_time": "20260814 10:30:02",
+                }]},
+            }},
+        }, ensure_ascii=False), encoding="utf-8")
+        records = discover_records(root)
+    assert len(records) == 1
+    assert records[0].facts["observations"][0]["entity_code"] == "688981.SH"
+    assert records[0].facts["observations"][0]["main_net_inflow_yuan"] == "300000000"
+
+
 def test_import_normalizes_legacy_wind_time_range_for_mysql():
     record = type("Record", (), {
         "trade_date": "2026-08-12",

@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,6 +28,7 @@ SAMPLE_TIMES = ("10:00", "10:30", "11:00", "11:15", "13:30", "13:45", "14:00", "
 PURE_SAMPLE_TIMES = {"11:15", "13:45", "14:45"}
 TRIGGER_TIMES = tuple(sorted(set(INTRADAY_TIMES) | set(SAMPLE_TIMES) | {"15:10"}))
 TERMINAL_STATUSES = {"completed", "completed_with_limits"}
+MAX_SCHEDULER_DELAY = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -93,8 +94,16 @@ def parse_now(value: str | None = None) -> datetime:
 
 def trigger_for_now(now: datetime) -> str | None:
     local = now.astimezone(TIMEZONE)
-    current = local.strftime("%H:%M")
-    return current if current in TRIGGER_TIMES else None
+    candidates = []
+    for planned_time in TRIGGER_TIMES:
+        hour, minute = (int(part) for part in planned_time.split(":"))
+        candidate = datetime.combine(local.date(), time(hour, minute), tzinfo=TIMEZONE)
+        if candidate <= local:
+            candidates.append((candidate, planned_time))
+    if not candidates:
+        return None
+    candidate, planned_time = max(candidates)
+    return planned_time if local - candidate <= MAX_SCHEDULER_DELAY else None
 
 
 def empty_manifest(trade_date: str) -> dict[str, Any]:

@@ -22,8 +22,8 @@ runtime = load_module("monitor_runtime", ROOT / "scripts/monitor_runtime.py")
 
 
 class MonitorRuntimeTest(unittest.TestCase):
-    def at(self, hour, minute):
-        return datetime(2026, 8, 13, hour, minute, tzinfo=runtime.TIMEZONE)
+    def at(self, hour, minute, second=0):
+        return datetime(2026, 8, 13, hour, minute, second, tzinfo=runtime.TIMEZONE)
 
     def test_intraday_frequency_and_close_are_separate(self):
         self.assertEqual([task.mode for task in runtime.tasks_for_trigger("15:00")], ["intraday"])
@@ -75,6 +75,26 @@ class MonitorRuntimeTest(unittest.TestCase):
             "planned_time": "11:30", "mode": "intraday", "status": "pending_fetch"
         }
         plan = runtime.plan_poll(self.at(12, 0), manifest)
+        self.assertEqual(plan["action"], "silent")
+        self.assertEqual(plan["reason"], "invalid_time")
+
+    def test_delayed_scheduler_wakeup_routes_to_recent_fixed_slot(self):
+        manifest = runtime.empty_manifest("2026-08-13")
+        plan = runtime.plan_poll(self.at(9, 31, 23), manifest)
+        self.assertEqual(plan["action"], "run")
+        self.assertEqual(
+            plan["tasks"],
+            [{
+                "key": "09:30:intraday",
+                "planned_time": "09:30",
+                "mode": "intraday",
+                "report_type": "intraday",
+            }],
+        )
+
+    def test_wakeup_beyond_delay_window_stays_invalid(self):
+        manifest = runtime.empty_manifest("2026-08-13")
+        plan = runtime.plan_poll(self.at(9, 35, 1), manifest)
         self.assertEqual(plan["action"], "silent")
         self.assertEqual(plan["reason"], "invalid_time")
 
