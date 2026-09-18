@@ -49,7 +49,7 @@ except ModuleNotFoundError:
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-STOCK_CODES = ("688981.SH", "300502.SZ", "300476.SZ")
+STOCK_CODES = ("688981.SH", "300502.SZ", "300476.SZ", "300285.SZ")
 INDEXES = (
     ("上证", "000001.SH"),
     ("深证", "399001.SZ"),

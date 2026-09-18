@@ -12,7 +12,7 @@
 
 调用 `stock_data.get_stock_price_indicators`，代码：
 
-`688981.SH,300502.SZ,300476.SZ`
+`688981.SH,300502.SZ,300476.SZ,300285.SZ`
 
 字段逐字使用：
 
